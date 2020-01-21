@@ -1,0 +1,10 @@
+*.la
+*.lo
+*.slo
+.libs
+Makefile
+configure
+aclocal.m4
+autom4te.cache
+*.log
+config.status
