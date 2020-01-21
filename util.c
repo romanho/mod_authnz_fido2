@@ -91,6 +91,16 @@ uint8_t *parse_cookieval(const char *_str, unsigned *outlen)
 	return rv;
 }
 
+void base64url2normal(char *str)
+{
+	char *p;
+	for(p = str; *p; ++p)
+		switch(*p) {
+		  case '-': *p = '+'; break;
+		  case '_': *p = '/'; break;
+		}
+}
+
 int sha256(const uint8_t *in, size_t inlen, uint8_t *out)
 {
 	EVP_MD_CTX *ctx;

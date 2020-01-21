@@ -131,7 +131,6 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 						  cookie_val,
 						  streq(req->hostname, "localhost") ? "" : "Secure;");
 	apr_table_setn(req->headers_out, "Set-Cookie", cookie);
-log_bytearray(req, "snd chall", challenge, CHALLENGE_LEN);	
 	
 	cp = challenge_str;
 	for(i = 0; i < CHALLENGE_LEN; ++i)
@@ -197,41 +196,50 @@ static const char *parse_assertation(request_rec *req, uint8_t *buf, size_t len,
 	uint8_t *cdata;
 	size_t cdata_len;
 
-#define get_str_attr(obj,name,field)								\
-	do {															\
-		if (!(node = json_object_get(obj, name)))					\
-			return "assertation."name" not found";					\
-		if (!json_is_string(node))									\
-			return "assertation."name" is not a string";			\
-		field = apr_pstrdup(req->pool, json_string_value(node));	\
-	} while(0)
-#define get_base64_attr(obj,name,field)						\
-	do {													\
+#define get_str_common(obj,name)							\
 		const char *__val;									\
 		if (!(node = json_object_get(obj, name)))			\
 			return "assertation."name" not found";			\
 		if (!json_is_string(node))							\
 			return "assertation."name" is not a string";	\
-		__val = json_string_value(node);					\
-		field##_len = apr_base64_decode_len(__val);			\
+		__val = json_string_value(node);
+#define get_dec_base64(val,field)							\
+		field##_len = apr_base64_decode_len(val);			\
 		if (!(field = apr_pcalloc(req->pool, field##_len)))	\
 			return "out of memory";							\
-		field##_len = apr_base64_decode(field, __val);		\
+		field##_len = apr_base64_decode(field, val);
+
+#define get_str_attr(obj,name,field)			\
+	do {										\
+		get_str_common(obj,name);				\
+		field = apr_pstrdup(req->pool, __val);	\
 	} while(0)
-	
+#define get_base64_attr(obj,name,field)			\
+	do {										\
+		get_str_common(obj,name);				\
+		get_dec_base64(__val,field);			\
+	} while(0)
+#define get_base64url_attr(obj,name,field)		\
+	do {										\
+		get_str_common(obj,name);				\
+		char *__str = alloca(strlen(__val)+1);	\
+		strcpy(__str, __val);					\
+		base64url2normal(__str);				\
+		get_dec_base64(__str,field);			\
+	} while(0)
+
 	if (!top || !json_is_object(top))
 		return apr_pstrdup(req->pool, jerr.text);
-//	get_base64_attr(top, "credentialId", resp->credid);
 	get_str_attr(top, "credentialId", resp->credid);
 	get_base64_attr(top, "authenticatorData", resp->authdata);
-	get_base64_attr(top, "signature", resp->authdata);
+	get_base64_attr(top, "signature", resp->signature);
 
 	get_base64_attr(top, "clientDataJSON", cdata);
 	jcdata = json_loadb(cdata, cdata_len, JSON_DISABLE_EOF_CHECK, &jerr);
 	if (!jcdata || !json_is_object(jcdata))
 		return apr_pstrdup(req->pool, jerr.text);
 
-	get_base64_attr(jcdata, "challenge", resp->cd_challenge);
+	get_base64url_attr(jcdata, "challenge", resp->cd_challenge);
 	get_str_attr(jcdata, "origin", resp->cd_origin);
 	get_str_attr(jcdata, "type", resp->cd_type);
 
@@ -255,7 +263,7 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	const char *p;
 	char *postdata;
 	apr_off_t postlen;
-	assert_resp_t assert;
+	assert_resp_t ar;
 	const char *errstr;
 
 	uint8_t *sv;
@@ -280,14 +288,13 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	}
 	memcpy(sess_chall, sv, CHALLENGE_LEN);
 	free(sv);
-log_bytearray(req, "rcv chall", sess_chall, CHALLENGE_LEN);	
 	if (!ctype || strcmp(ctype, "application/json") != 0) {
 		error("content-type must be application/json");
 		return HTTP_UNSUPPORTED_MEDIA_TYPE;
 	}
-	postdata = apr_get_postdata(req, &postlen);
 
-	if ((errstr = parse_assertation(req, postdata, postlen, &assert))) {
+	postdata = apr_get_postdata(req, &postlen);
+	if ((errstr = parse_assertation(req, postdata, postlen, &ar))) {
 		debug("parse error in posted assertation data: %s", errstr);
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
@@ -297,36 +304,35 @@ log_bytearray(req, "rcv chall", sess_chall, CHALLENGE_LEN);
 	/* XXX: maybe some fido_assert_* functions can be used to make some of
 	 * the checks below */
 	
-	if (strcmp(assert.cd_type, "webauthn.get") != 0) {
+	if (strcmp(ar.cd_type, "webauthn.get") != 0) {
 		error("parse error in posted assertation data: %s", errstr);
 		return HTTP_BAD_REQUEST;
 	}
 	/* check correct origin (should be https:// + our name or localhost, where
 	 * also http is allowed) */
-	if (!(streq(assert.cd_origin, "http://localhost") ||
-		  strprefix(assert.cd_origin, "http://localhost:") ||
-		  ((p = strprefix(assert.cd_origin, "https://")) &&
+	if (!(streq(ar.cd_origin, "http://localhost") ||
+		  strprefix(ar.cd_origin, "http://localhost:") ||
+		  ((p = strprefix(ar.cd_origin, "https://")) &&
 		   streq(p, req->hostname)))) {
 		warn("wrong origin (%s vs. expected %s)",
-			 assert.cd_origin+strlen("https://"), req->hostname);
+			 ar.cd_origin+strlen("https://"), req->hostname);
 		return HTTP_BAD_REQUEST;
 	}
 	/* check challenge is the same */
-log_bytearray(req, "assert.cd", assert.cd_challenge,assert.cd_challenge_len);
-	if (assert.cd_challenge_len != CHALLENGE_LEN ||
-		memcmp(sess_chall, assert.cd_challenge, CHALLENGE_LEN) != 0) {
+	if (ar.cd_challenge_len != CHALLENGE_LEN ||
+		memcmp(sess_chall, ar.cd_challenge, CHALLENGE_LEN) != 0) {
 		error("challenge in reply is different from state");
 		return HTTP_BAD_REQUEST;
 	}
 
 	authenticator_data_t authdata;
-	if (assert.authdata_len != sizeof(raw_authenticator_data_t)) {
+	if (ar.authdata_len != sizeof(raw_authenticator_data_t)) {
 		warn("bad authenticator_data length (%ld vs. expected %ld",
-			 assert.authdata_len, sizeof(raw_authenticator_data_t));
+			 ar.authdata_len, sizeof(raw_authenticator_data_t));
 		return HTTP_BAD_REQUEST;
 	}
 	decode_authenticator_data(&authdata,
-							  (raw_authenticator_data_t*)assert.authdata);
+							  (raw_authenticator_data_t*)ar.authdata);
 	/* check that rp_id hash is correct */
 	if (memcmp(authdata.rp_id_hash, conf->rpid_hash, SHA256_LEN) != 0) {
 		error("RP-ID hash mismatch");
@@ -342,9 +348,10 @@ log_bytearray(req, "assert.cd", assert.cd_challenge,assert.cd_challenge_len);
 		return HTTP_BAD_REQUEST;
 	}
 
+	debug("credID from client = %s", ar.credid);
 	fido2_user_t *uent;
-	if (!(uent = getuser_bycredid(req, conf, assert.credid))) {
-		error("known credential ID %s", assert.credid);
+	if (!(uent = getuser_bycredid(req, conf, ar.credid))) {
+		error("known credential ID %s", ar.credid);
 		return HTTP_BAD_REQUEST;
 	}
 
@@ -354,7 +361,7 @@ log_bytearray(req, "assert.cd", assert.cd_challenge,assert.cd_challenge_len);
 	jwt_t *jwt;
 	apr_time_t now = apr_time_sec(apr_time_now());
 	
- 	if (!jwt_new(&jwt)) {
+ 	if (jwt_new(&jwt)) {
 		error("creating token: %s", strerror(errno));
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
@@ -368,6 +375,7 @@ log_bytearray(req, "assert.cd", assert.cd_challenge,assert.cd_challenge_len);
 	jwt_add_grant_int(jwt, "iat", now);
 	jwt_add_grant_int(jwt, "exp", now + conf->token_validity);
 
+	req->user = (char*)uent->name;
 	ap_set_content_type(req, "application/json");
 	ap_rprintf(req, "{\"token\":\"%s\"}", jwt_encode_str(jwt));
 	jwt_free(jwt);
