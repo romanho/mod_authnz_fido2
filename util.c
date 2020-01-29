@@ -25,7 +25,7 @@ static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const
 {
 	FILE *f;
 	char line[1024];
-	const int NFIELDS = 3;
+	const int NFIELDS = 4;
 	fido2_user_t *usr;
 
 	if (!(f = fopen(conf->user_file, "r")))
@@ -47,7 +47,8 @@ static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const
 			usr = apr_pcalloc(req->pool, sizeof(*usr));
 			usr->name = apr_pstrdup(req->pool, v[0]);
 			usr->credid = apr_pstrdup(req->pool, v[1]);
-			usr->pubkey = apr_pstrdup(req->pool, v[2]);
+			usr->ktype  = apr_pstrdup(req->pool, v[2]);
+			usr->pubkey = apr_pstrdup(req->pool, v[3]);
 			usr->counter = cntr;
 			break;
 		}

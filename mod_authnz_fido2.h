@@ -39,6 +39,7 @@ typedef struct {
 typedef struct {
 	const char *name;
 	const char *credid;
+	const char *ktype;
 	const char *pubkey;
 	unsigned counter;
 } fido2_user_t;
