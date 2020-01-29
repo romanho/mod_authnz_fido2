@@ -36,11 +36,15 @@
 #define VERSION 	"0.1"
 
 typedef struct {
+	uint8_t *chmac;
+	size_t  chmac_len;
 	char *credid;
 	uint8_t *authdata;
 	size_t  authdata_len;
 	uint8_t *signature;
 	size_t  signature_len;
+	uint8_t *cdata;
+	size_t  cdata_len;
 	/* substructure 'clientData' */
 	uint8_t *cd_challenge;
 	size_t  cd_challenge_len;
@@ -82,15 +86,16 @@ static const char *login_html = "\
 					(null, new Uint8Array(arr)));\n\
 	}\n\
     navigator.credentials.get(%s)\n\
-    .then((asrt) => {\n\
+    .then((ar) => {\n\
       return fetch('%s', {\n\
         method: 'POST',\n\
         headers: {'Content-Type': 'application/json'},\n\
         body: '{ '+\n\
-		  '\"credentialId\":\"'+encode(asrt.rawId)+'\", '+\n\
-		  '\"authenticatorData\":\"\'+encode(asrt.response.authenticatorData)+'\", '+\n\
-		  '\"clientDataJSON\":\"'+encode(asrt.response.clientDataJSON)+'\", '+\n\
-		  '\"signature\":\"'+encode(asrt.response.signature)+'\" }'\n\
+		  '\"sessiondata\":\"%s\",'+\n\
+		  '\"credentialId\":\"'+encode(ar.rawId)+'\", '+\n\
+		  '\"authenticatorData\":\"\'+encode(ar.response.authenticatorData)+'\", '+\n\
+		  '\"clientDataJSON\":\"'+encode(ar.response.clientDataJSON)+'\", '+\n\
+		  '\"signature\":\"'+encode(ar.response.signature)+'\" }'\n\
       })})\n\
     .then(function(response) {\n\
       var stat = response.ok ? 'successful' : 'unsuccessful';\n\
@@ -109,10 +114,10 @@ console.log('error handler: '+reason);\n\
 
 static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 {
-	uint8_t challenge[CHALLENGE_LEN+CHMACKEY_LEN];
-	uint8_t cookie_bin[CHALLENGE_LEN+SHA256_LEN];
-	uint8_t cookie_val[(CHALLENGE_LEN+SHA256_LEN)*2];
-	char challenge_str[CHALLENGE_LEN*4+1], *cp, *cookie;
+	uint8_t challenge[CHALLENGE_LEN];
+	uint8_t hash[SHA256_LEN];
+	char hmac_str[SHA256_LEN*2];
+	char challenge_str[CHALLENGE_LEN*4+1], *cp;
 	unsigned i;
 
 	// XXX: use username-less flag for rp_id vs. allowCredentials
@@ -120,24 +125,13 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	/* a simple HMAC with a short key (128b currently) should be enough to
 	 * avoid challenge trickeries */
 	RAND_bytes(challenge, CHALLENGE_LEN);
-	memcpy(cookie_bin, challenge, CHALLENGE_LEN);
-	memcpy(challenge+CHALLENGE_LEN, chmackey, CHMACKEY_LEN);
-	sha256(challenge, CHALLENGE_LEN+CHMACKEY_LEN, cookie_bin+CHALLENGE_LEN);
-	memset(challenge+CHALLENGE_LEN, 0, CHMACKEY_LEN);
-
-	apr_base64_encode(cookie_val, cookie_bin, CHALLENGE_LEN+SHA256_LEN);
-	cookie = apr_psprintf(req->pool, "fido2session=%s;%s"
-						  "HttpOnly;SameSite=Strict",
-						  cookie_val,
-						  streq(req->hostname, "localhost") ? "" : "Secure;");
-	apr_table_setn(req->headers_out, "Set-Cookie", cookie);
+	sha256_2buf(challenge, CHALLENGE_LEN, chmackey, CHMACKEY_LEN, hash);
+	apr_base64_encode(hmac_str, hash, SHA256_LEN);
 	
 	cp = challenge_str;
 	for(i = 0; i < CHALLENGE_LEN; ++i)
 		cp += sprintf(cp, "%s%u", i?",":"", challenge[i]);
 	memset(challenge, 0, sizeof(challenge));
-	memset(cookie_bin, 0, sizeof(cookie_bin));
-	memset(cookie_val, 0, sizeof(cookie_val));
 
 	// XXX: if allowCredentials is not present, I always get an
 	// InvalidStateError from credentials.get :-(
@@ -159,8 +153,10 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	
 	req->user = "nobody";
 	ap_set_content_type(req, "text/html; charset=US-ASCII");
-	ap_rprintf(req, login_html, obj_str, req->uri);
+	apr_table_setn(req->headers_out, "Cache-Control", "no-cache");
+	ap_rprintf(req, login_html, obj_str, req->uri, hmac_str);
 
+	memset(hmac_str, 0, sizeof(hmac_str));
 	memset(challenge_str, 0, sizeof(challenge_str));
 	return DONE;
 }
@@ -193,8 +189,6 @@ static const char *parse_assertation(request_rec *req, uint8_t *buf, size_t len,
 {
 	json_error_t jerr;
 	json_t *top = json_loadb(buf, len, 0, &jerr), *jcdata, *node;
-	uint8_t *cdata;
-	size_t cdata_len;
 
 #define get_str_common(obj,name)							\
 		const char *__val;									\
@@ -230,12 +224,14 @@ static const char *parse_assertation(request_rec *req, uint8_t *buf, size_t len,
 
 	if (!top || !json_is_object(top))
 		return apr_pstrdup(req->pool, jerr.text);
+	get_base64_attr(top, "sessiondata", resp->chmac);
 	get_str_attr(top, "credentialId", resp->credid);
 	get_base64_attr(top, "authenticatorData", resp->authdata);
 	get_base64_attr(top, "signature", resp->signature);
 
-	get_base64_attr(top, "clientDataJSON", cdata);
-	jcdata = json_loadb(cdata, cdata_len, JSON_DISABLE_EOF_CHECK, &jerr);
+	get_base64_attr(top, "clientDataJSON", resp->cdata);
+	jcdata = json_loadb(resp->cdata, resp->cdata_len,
+						JSON_DISABLE_EOF_CHECK, &jerr);
 	if (!jcdata || !json_is_object(jcdata))
 		return apr_pstrdup(req->pool, jerr.text);
 
@@ -265,29 +261,10 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	apr_off_t postlen;
 	assert_resp_t ar;
 	const char *errstr;
-
 	uint8_t *sv;
 	unsigned svlen;
-	uint8_t hmac[CHALLENGE_LEN+CHMACKEY_LEN], hash[SHA256_LEN];
-	uint8_t sess_chall[CHALLENGE_LEN];
+	uint8_t hash[SHA256_LEN];
 	
-	const char *cookie = apr_table_get(req->headers_in, "Cookie");
-	if (!cookie || !(sv = parse_cookieval(cookie, &svlen)) ||
-		svlen != CHALLENGE_LEN+SHA256_LEN) {
-		error("missing session");
-		return HTTP_BAD_REQUEST;
-	}
-	memcpy(hmac, sv, CHALLENGE_LEN);
-	memcpy(hmac+CHALLENGE_LEN, chmackey, CHMACKEY_LEN);
-	sha256(hmac, CHALLENGE_LEN+CHMACKEY_LEN, hash);
-	memset(hmac, 0, sizeof(hmac));
-	if (memcmp(sv+CHALLENGE_LEN, hash, SHA256_LEN) != 0) {
-		free(sv);
-		error("bad session contents");
-		return HTTP_BAD_REQUEST;
-	}
-	memcpy(sess_chall, sv, CHALLENGE_LEN);
-	free(sv);
 	if (!ctype || strcmp(ctype, "application/json") != 0) {
 		error("content-type must be application/json");
 		return HTTP_UNSUPPORTED_MEDIA_TYPE;
@@ -318,10 +295,16 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 			 ar.cd_origin+strlen("https://"), req->hostname);
 		return HTTP_BAD_REQUEST;
 	}
-	/* check challenge is the same */
+
+	/* check challenge HMAC */
 	if (ar.cd_challenge_len != CHALLENGE_LEN ||
-		memcmp(sess_chall, ar.cd_challenge, CHALLENGE_LEN) != 0) {
-		error("challenge in reply is different from state");
+		ar.chmac_len != SHA256_LEN) {
+		error("bad challenge sizes in response");
+		return HTTP_BAD_REQUEST;
+	}
+	sha256_2buf(ar.cd_challenge, CHALLENGE_LEN, chmackey, CHMACKEY_LEN, hash);
+	if (memcmp(ar.chmac, hash, SHA256_LEN) != 0) {
+		error("bad challenge in reply (not from us)");
 		return HTTP_BAD_REQUEST;
 	}
 
