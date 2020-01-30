@@ -1,5 +1,6 @@
 *.la
 *.lo
+*.o
 *.slo
 .libs
 Makefile
@@ -8,3 +9,4 @@ aclocal.m4
 autom4te.cache
 *.log
 config.status
+fido2-useradd
