@@ -142,15 +142,15 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 		"\"userVerification\": \"%s\", "
 		"\"timeout\": %d, "
 		"\"challenge\": new Uint8Array([%s])"
-		"%s%s"
+		"%s"
 		"} }",
 		conf->rpid_str ?: "",
 		conf->require_UV ? "required" : "discouraged",
-		(conf->timeout >= 0 ?: 30) * 1000,
+		(conf->timeout >= 0 ? conf->timeout : 30) * 1000,
 		challenge_str,
-		conf->offer_all_users ? ", \"allowCredentials\": [ ]" : "", ""
+		conf->offer_all_users ? ", \"allowCredentials\": [ ]" : ""
 		);
-	
+
 	req->user = "nobody";
 	ap_set_content_type(req, "text/html; charset=US-ASCII");
 	apr_table_setn(req->headers_out, "Cache-Control", "no-cache");
@@ -247,9 +247,9 @@ static void decode_authenticator_data(authenticator_data_t *out,
 {
 	memcpy(out->rp_id_hash, in->rp_id_hash, sizeof(out->rp_id_hash));
 	out->flags = in->flags;
-	out->counter = in->counter[3] ||
-				   (in->counter[2]<<8) ||
-				   (in->counter[1]<<16) ||
+	out->counter = in->counter[3] |
+				   (in->counter[2]<<8) |
+				   (in->counter[1]<<16) |
 				   (in->counter[0]<<24);
 }
 
@@ -261,8 +261,6 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	apr_off_t postlen;
 	assert_resp_t ar;
 	const char *errstr;
-	uint8_t *sv;
-	unsigned svlen;
 	uint8_t hash[SHA256_LEN];
 	
 	if (!ctype || strcmp(ctype, "application/json") != 0) {
@@ -374,8 +372,8 @@ static int fido2_handler(request_rec *req)
 	char *auth_line;
 
 	debug("called, auth_type='%s'", auth_type);
-    if (!auth_type || strcasecmp(auth_type, "fido2") != 0)
-        return DECLINED;
+	if (!auth_type || strcasecmp(auth_type, "fido2") != 0)
+		return DECLINED;
 	
 	/* Check the HTTP header */
 	auth_line = (char*)apr_table_get(
