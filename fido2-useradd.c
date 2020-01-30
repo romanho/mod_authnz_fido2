@@ -292,7 +292,7 @@ int main(int argc, char *argv[])
 		  break;
 	  }  
 	  case COSE_EDDSA: {
-		  rs256_pk_t *pk;
+		  eddsa_pk_t *pk;
 		  if (!(pk = eddsa_pk_new()) ||
 			  eddsa_pk_from_ptr(pk, pkey_data, pkey_len) != FIDO_OK ||
 			  !(pkey = eddsa_pk_to_EVP_PKEY(pk)))
