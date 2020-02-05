@@ -169,6 +169,11 @@ void log_bytearray(request_rec *req, const char *prefix, uint8_t *data, size_t l
 						  
 	}
 	if (len % 16)
-		debug("%s: %04x: %s", prefix, i&~0xf, buf);
+		debug("%s %04x: %s", prefix, i&~0xf, buf);
 }
+
+
+
+
+
 
