@@ -26,6 +26,11 @@
 #include <mod_ssl.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
+#include <openssl/ec.h>
+#include <openssl/ecdsa.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
 #include <jansson.h>
 #include <jwt.h>
 
@@ -329,14 +334,61 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		return HTTP_BAD_REQUEST;
 	}
 
-	debug("credID from client = %s", ar.credid);
 	fido2_user_t *uent;
 	if (!(uent = getuser_bycredid(req, conf, ar.credid))) {
-		error("known credential ID %s", ar.credid);
+		error("unknown credential ID %s", ar.credid);
 		return HTTP_BAD_REQUEST;
 	}
+	debug("credID=%s -> user %s", ar.credid, uent->name);
+	
+	/* hash authdata || clientdata */
+	sha256(ar.cdata, ar.cdata_len, hash);
+	uint8_t catbuf[ar.authdata_len+SHA256_LEN];
+	memcpy(catbuf, ar.authdata, ar.authdata_len);
+	memcpy(catbuf+ar.authdata_len, hash, SHA256_LEN);
+	sha256(catbuf, sizeof(catbuf), hash);
 
-	/* XXX: actually verify the signature! */
+	unsigned pkey_len = apr_base64_decode_len(uent->pubkey);
+	uint8_t pkey_data[pkey_len];
+	const uint8_t *pkey = pkey_data;
+	pkey_len = apr_base64_decode(pkey_data, uent->pubkey);
+
+	int verified = 0;
+	unsigned long e;
+	if (streq(uent->ktype, "es256")) {
+		EC_KEY *ec = d2i_EC_PUBKEY(NULL, &pkey, pkey_len);
+		if (!ec) {
+			error("failed to parse EC pubkey");
+			return HTTP_INTERNAL_SERVER_ERROR;
+		}
+		verified = ECDSA_verify(0, hash, SHA256_LEN,
+								ar.signature, ar.signature_len, ec);
+		e = ERR_get_error();
+		EC_KEY_free(ec);
+	}
+	else if (streq(uent->ktype, "rs256")) {
+		RSA *rk = d2i_RSA_PUBKEY(NULL, &pkey, pkey_len);
+		if (!rk) {
+			error("failed to parse RSA pubkey");
+			return HTTP_INTERNAL_SERVER_ERROR;
+		}
+		verified = RSA_verify(NID_sha256, hash, SHA256_LEN,
+							  ar.signature, ar.signature_len, rk);
+		e = ERR_get_error();
+		RSA_free(rk);
+	}
+	else {
+		error("unsupported key type '%s'", uent->ktype);
+		return HTTP_INTERNAL_SERVER_ERROR;
+	}
+	debug("vres=%d", verified);
+
+	if (!verified) {
+		char ebuf[1024];
+		ERR_error_string_n(e, ebuf, sizeof(ebuf));
+		debug("OpenSSL error %lu: %s", e, ebuf);
+		return DECLINED;
+	}
 	
 	/* after the checks: generate a JWT ticket */
 	jwt_t *jwt;
