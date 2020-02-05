@@ -67,6 +67,7 @@ extern const command_rec authnz_fido2_cmds[];
 /* util.c */
 fido2_user_t *getuser_byname(request_rec *req, fido2_config_t *conf, const char *name);
 fido2_user_t *getuser_bycredid(request_rec *req, fido2_config_t *conf, const char *credid);
+void for_all_users(request_rec *req, fido2_config_t *conf, int (*callback)(const fido2_user_t *u));
 uint8_t *parse_cookieval(const char *_str, unsigned *outlen);
 void base64url2normal(char *str);
 int sha256(const uint8_t *in, size_t inlen, uint8_t *out);

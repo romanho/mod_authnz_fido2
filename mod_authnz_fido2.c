@@ -86,9 +86,13 @@ static const char *login_html = "\
   <p>This requires a browser supporting the WebAuthn API</p>\n\
   <p>Trigger your authenticator device now...</p>\n\
   <script>\n\
-	function encode(arr) {\n\
+	function enc(arr) {\n\
 		return btoa(String.fromCharCode.apply\n\
 					(null, new Uint8Array(arr)));\n\
+	}\n\
+	function dec(str) {\n\
+		return Uint8Array.from(Array.prototype.map.call(atob(str),\n\
+			   function(x) { return x.charCodeAt(0); }));\n\
 	}\n\
     navigator.credentials.get(%s)\n\
     .then((ar) => {\n\
@@ -97,10 +101,10 @@ static const char *login_html = "\
         headers: {'Content-Type': 'application/json'},\n\
         body: '{ '+\n\
 		  '\"sessiondata\":\"%s\",'+\n\
-		  '\"credentialId\":\"'+encode(ar.rawId)+'\", '+\n\
-		  '\"authenticatorData\":\"\'+encode(ar.response.authenticatorData)+'\", '+\n\
-		  '\"clientDataJSON\":\"'+encode(ar.response.clientDataJSON)+'\", '+\n\
-		  '\"signature\":\"'+encode(ar.response.signature)+'\" }'\n\
+		  '\"credentialId\":\"'+enc(ar.rawId)+'\", '+\n\
+		  '\"authenticatorData\":\"\'+enc(ar.response.authenticatorData)+'\", '+\n\
+		  '\"clientDataJSON\":\"'+enc(ar.response.clientDataJSON)+'\", '+\n\
+		  '\"signature\":\"'+enc(ar.response.signature)+'\" }'\n\
       })})\n\
     .then(function(response) {\n\
       var stat = response.ok ? 'successful' : 'unsuccessful';\n\
@@ -122,8 +126,8 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	uint8_t challenge[CHALLENGE_LEN];
 	uint8_t hash[SHA256_LEN];
 	char hmac_str[SHA256_LEN*2];
-	char challenge_str[CHALLENGE_LEN*4+1], *cp;
-	unsigned i;
+	char challenge_str[CHALLENGE_LEN*2];
+	char allowed_ids[1024] = "";
 
 	// XXX: use username-less flag for rp_id vs. allowCredentials
 
@@ -132,28 +136,43 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	RAND_bytes(challenge, CHALLENGE_LEN);
 	sha256_2buf(challenge, CHALLENGE_LEN, chmackey, CHMACKEY_LEN, hash);
 	apr_base64_encode(hmac_str, hash, SHA256_LEN);
-	
-	cp = challenge_str;
-	for(i = 0; i < CHALLENGE_LEN; ++i)
-		cp += sprintf(cp, "%s%u", i?",":"", challenge[i]);
+	apr_base64_encode(challenge_str, challenge, CHALLENGE_LEN);
 	memset(challenge, 0, sizeof(challenge));
 
-	// XXX: if allowCredentials is not present, I always get an
-	// InvalidStateError from credentials.get :-(
+	if (conf->offer_all_users) {
+		char *idstr = allowed_ids;
+		size_t idlen = sizeof(allowed_ids), l;
+		int first = 1;
+
+		int add_credid(const fido2_user_t *u) {
+			l = snprintf(idstr, idlen, "%s{'type':'public-key','id':dec('%s')}",
+						 first ? "" : ", ", u->credid);
+			idstr += l; idlen -= l;
+			first = 0;
+			return 0;
+		}
+
+		l = snprintf(idstr, idlen, ", 'allowCredentials':[");
+		idstr += l; idlen -= l;
+		for_all_users(req, conf, add_credid);
+		l = snprintf(idstr, idlen, "]");
+		idstr += l; idlen -= l;
+	}
+
 	char *obj_str = apr_psprintf(
 		req->pool,
-		"{ \"publicKey\": { "
-		"\"rpId\": \"%s\", "
-		"\"userVerification\": \"%s\", "
-		"\"timeout\": %d, "
-		"\"challenge\": new Uint8Array([%s])"
+		"{ 'publicKey': { "
+		"'rpId': '%s', "
+		"'userVerification': '%s', "
+		"'timeout': %d, "
+		"'challenge': dec('%s')"
 		"%s"
 		"} }",
 		conf->rpid_str ?: "",
 		conf->require_UV ? "required" : "discouraged",
 		(conf->timeout >= 0 ? conf->timeout : 30) * 1000,
 		challenge_str,
-		conf->offer_all_users ? ", \"allowCredentials\": [ ]" : ""
+		allowed_ids
 		);
 
 	req->user = "nobody";

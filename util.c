@@ -21,7 +21,9 @@
 
 
 
-static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const char *xxx, unsigned fno)
+static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf,
+								   const char *xxx, unsigned fno,
+								   int (*callback)(const fido2_user_t *u))
 {
 	FILE *f;
 	char line[1024];
@@ -46,7 +48,7 @@ static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const
 		}			
 		cntr = strtoul(p, NULL, 10);
 		
-		if (streq(v[fno], xxx)) {
+		if (xxx && streq(v[fno], xxx)) {
 			usr = apr_pcalloc(req->pool, sizeof(*usr));
 			usr->name = apr_pstrdup(req->pool, v[0]);
 			usr->credid = apr_pstrdup(req->pool, v[1]);
@@ -54,6 +56,16 @@ static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const
 			usr->pubkey = apr_pstrdup(req->pool, v[3]);
 			usr->counter = cntr;
 			break;
+		}
+		if (callback) {
+			fido2_user_t u;
+			u.name   = v[0];
+			u.credid = v[1];
+			u.ktype  = v[2];
+			u.pubkey = v[3];
+			u.counter = cntr;
+			if (callback(&u))
+				break;
 		}
 	  next:
 		;
@@ -68,11 +80,16 @@ static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const
 
 fido2_user_t *getuser_byname(request_rec *req, fido2_config_t *conf, const char *name)
 {
-	return getuser_byXXX(req, conf, name, 0);
+	return getuser_byXXX(req, conf, name, 0, NULL);
 }
 fido2_user_t *getuser_bycredid(request_rec *req, fido2_config_t *conf, const char *credid)
 {
-	return getuser_byXXX(req, conf, credid, 1);
+	return getuser_byXXX(req, conf, credid, 1, NULL);
+}
+
+void for_all_users(request_rec *req, fido2_config_t *conf, int (*callback)(const fido2_user_t *u))
+{
+	getuser_byXXX(req, conf, NULL, 0, callback);
 }
 
 uint8_t *parse_cookieval(const char *_str, unsigned *outlen)
