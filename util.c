@@ -80,7 +80,6 @@ uint8_t *parse_cookieval(const char *_str, unsigned *outlen)
 	char str[strlen(_str)+1], *save;
 	const char *p;
 	uint8_t *rv = NULL;
-	unsigned len;
 
 	strcpy(str, _str);
 	for(p = strtok_r(str, ";", &save); p; p = strtok_r(NULL, ";", &save)) {
@@ -158,7 +157,7 @@ int sha256_str(const char *str, uint8_t *out)
 
 void log_bytearray(request_rec *req, const char *prefix, uint8_t *data, size_t len)
 {
-	char buf[16*3+1+1], *p;
+	char buf[16*3+1+1], *p = buf;
 	unsigned i;
 
 	for(i = 0; i < len; ++i) {
