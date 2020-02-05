@@ -26,7 +26,7 @@ static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const
 	FILE *f;
 	char line[1024];
 	const int NFIELDS = 4;
-	fido2_user_t *usr;
+	fido2_user_t *usr = NULL;
 
 	if (!(f = fopen(conf->user_file, "r")))
 		return NULL;
@@ -34,6 +34,9 @@ static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf, const
 		char *v[NFIELDS], *p;
 		unsigned i;
 		unsigned cntr;
+
+		if (line[0] == '\n' || line[0] == '#')
+			continue;
 
 		for(p = line, i = 0; i < NFIELDS; ++i) {
 			v[i] = p;
