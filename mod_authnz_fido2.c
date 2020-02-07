@@ -427,16 +427,70 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		error("token_set_alg failed");
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
-	jwt_add_grant(jwt, "aud", conf->rpid_str);
+	jwt_add_grant(jwt, "iss", rpid);
+	jwt_add_grant(jwt, "aud", rpid);
 	jwt_add_grant(jwt, "user", uent->name);
 	jwt_add_grant_int(jwt, "iat", now);
 	jwt_add_grant_int(jwt, "exp", now + conf->token_validity);
 
 	req->user = (char*)uent->name;
 	ap_set_content_type(req, "application/json");
+	apr_table_setn(req->err_headers_out, "WWW-Authenticate",
+				   apr_pstrcat(req->pool, "Bearer realm=\"",
+							   ap_auth_name(req),"\"", NULL));
 	ap_rprintf(req, "{\"token\":\"%s\"}", jwt_encode_str(jwt));
 	jwt_free(jwt);
 
+	return OK; // or HTTP_UNAUTHORIZED to force passing token?
+}
+
+static void set_auth_error(request_rec *req, const char *err, const char *text)
+{
+	apr_table_setn(req->err_headers_out, "WWW-Authenticate",
+				   apr_pstrcat(req->pool,
+							   "Bearer realm=\"", ap_auth_name(req),"\", "
+							   "error=\", err, \", "
+							   "error_description=\"", text, "\"", NULL));
+}
+
+static int check_token(request_rec *req, fido2_config_t *conf,
+					   const char *tokstr, char **user)
+{
+	jwt_t *jwt;
+	const char *rpid = get_rpid(req, conf);
+	const char *p;
+	long expire;
+
+	if (jwt_decode(&jwt, tokstr, jwtkey, JWTKEY_LEN)) {
+		error("token decoding failed");
+		set_auth_error(req, "invalid_token",
+					   "token is malformed or signature invalid");
+		return HTTP_UNAUTHORIZED;
+	}
+	if (jwt && jwt_get_alg(jwt) == JWT_ALG_HS256) {
+		set_auth_error(req, "invalid_token", "bad signature algorithm");
+		return HTTP_UNAUTHORIZED;
+	}
+	if (!(p = jwt_get_grant(jwt, "iss")) || !streq(p, rpid)) {
+		set_auth_error(req, "invalid_token", "token issuer invalid");
+		return HTTP_UNAUTHORIZED;
+	}
+	if (!(p = jwt_get_grant(jwt, "aud")) || !streq(p, rpid)) {
+		set_auth_error(req, "invalid_token", "token audience invalid");
+		return HTTP_UNAUTHORIZED;
+	}
+	
+	expire = jwt_get_grant_int(jwt, "exp");
+	if (expire <= 0) {
+		set_auth_error(req, "invalid_token", "token expiration missing");
+		return HTTP_UNAUTHORIZED;
+	}
+	if (expire < time(NULL)) {
+		set_auth_error(req, "invalid_token", "token expired");
+		return HTTP_UNAUTHORIZED;
+	}
+	
+	*user = apr_pstrdup(req->pool, jwt_get_grant(jwt, "user"));
 	return OK;
 }
 
@@ -445,11 +499,16 @@ static int fido2_handler(request_rec *req)
 	fido2_config_t *conf =
 		ap_get_module_config(req->per_dir_config, &authnz_fido2_module);
     const char *auth_type = ap_auth_type(req);
+    const char *auth_name = ap_auth_name(req);
 	char *auth_line;
 
 	debug("called, auth_type='%s'", auth_type);
 	if (!auth_type || strcasecmp(auth_type, "fido2") != 0)
 		return DECLINED;
+	if (!auth_name) {
+		error("no AuthName defined");
+		return HTTP_INTERNAL_SERVER_ERROR;
+	}
 	
 	/* Check the HTTP header */
 	auth_line = (char*)apr_table_get(
@@ -475,9 +534,22 @@ static int fido2_handler(request_rec *req)
    }
    else {
 	   /* check JWT */
-	   debug("auth_line='%s'", auth_line);
+	   const char *tokstr;
+	   char *user;
+	   int rv;
 
-	   /* XXX: check the token */
+	   debug("auth_line='%s'", auth_line);
+	   if (!(tokstr = strprefix(auth_line, "Bearer "))) {
+		   error("Authorization scheme is not 'Bearer'");
+		   set_auth_error(req, "invalid request",
+						  "Authentication type must be 'Bearer'");
+		   return HTTP_UNAUTHORIZED;
+	   }
+	   if ((rv = check_token(req, conf, tokstr, &user)) == OK) {
+		   //apr_table_setn(r->notes, "jwt", (const char*)token);
+		   req->user = user;
+	   }
+	   return rv;
    }
    
     return DECLINED;
