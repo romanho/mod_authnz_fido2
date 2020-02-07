@@ -121,6 +121,11 @@ console.log('error handler: '+reason);\n\
 /* ---------------------------------------------------------------------- */
 
 
+static const char *get_rpid(request_rec *req, fido2_config_t *conf)
+{
+	return conf->rpid_str ?: req->hostname;
+}
+
 static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 {
 	uint8_t challenge[CHALLENGE_LEN];
@@ -168,7 +173,7 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 		"'challenge': dec('%s')"
 		"%s"
 		"} }",
-		conf->rpid_str ?: "",
+		get_rpid(req, conf),
 		conf->require_UV ? "required" : "discouraged",
 		(conf->timeout >= 0 ? conf->timeout : 30) * 1000,
 		challenge_str,
@@ -280,6 +285,7 @@ static void decode_authenticator_data(authenticator_data_t *out,
 static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 {
 	const char *ctype = apr_table_get(req->headers_in, "Content-Type");
+	const char *rpid = get_rpid(req, conf);
 	const char *p;
 	char *postdata;
 	apr_off_t postlen;
