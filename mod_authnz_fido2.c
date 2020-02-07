@@ -110,7 +110,6 @@ static const char *login_html = "\
       var stat = response.ok ? 'successful' : 'unsuccessful';\n\
       alert('Authentication ' + stat + ' More details in server log...');\n\
     }, function(reason) {\n\
-console.log('error handler: '+reason);\n\
       alert(reason);\n\
     });\n\
   </script>\n\
@@ -406,13 +405,13 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		error("unsupported key type '%s'", uent->ktype);
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
-	debug("vres=%d", verified);
+	debug("signature verified=%d", verified);
 
 	if (!verified) {
 		char ebuf[1024];
 		ERR_error_string_n(e, ebuf, sizeof(ebuf));
 		debug("OpenSSL error %lu: %s", e, ebuf);
-		return DECLINED;
+		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 	
 	/* after the checks: generate a JWT ticket */
