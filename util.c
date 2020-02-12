@@ -92,19 +92,23 @@ void for_all_users(request_rec *req, fido2_config_t *conf, int (*callback)(const
 	getuser_byXXX(req, conf, NULL, 0, callback);
 }
 
-uint8_t *parse_cookieval(const char *_str, unsigned *outlen)
+char *parse_cookie(request_rec *req, const char *cookiename)
 {
-	char str[strlen(_str)+1], *save;
+	const char *cookie = (char*)apr_table_get(req->headers_in, "Cookie");
+	char *str, *save, *rv = NULL;
 	const char *p;
-	uint8_t *rv = NULL;
+	
+	if (!cookie)
+		return NULL;
 
-	strcpy(str, _str);
+	/* need a writable copy for strtok() */
+	str = alloca(strlen(cookie+1));
+	strcpy(str, cookie);
+
 	for(p = strtok_r(str, ";", &save); p; p = strtok_r(NULL, ";", &save)) {
 		p += strspn(p, " ");
-		if ((p = strprefix(p, "fido2session="))) {
-			*outlen = apr_base64_decode_len(p);
-			rv = malloc(*outlen);
-			*outlen = apr_base64_decode(rv, p);
+		if ((p = strprefix(p, cookiename)) && *p == '=') {
+			rv = apr_pstrdup(req->pool, p+1);
 			break;
 		}
 	}
