@@ -106,11 +106,14 @@ static const char *login_html = "\
 		  '\"clientDataJSON\":\"'+enc(ar.response.clientDataJSON)+'\", '+\n\
 		  '\"signature\":\"'+enc(ar.response.signature)+'\" }'\n\
       })})\n\
-    .then(function(response) {\n\
-      var stat = response.ok ? 'successful' : 'unsuccessful';\n\
-      alert('Authentication ' + stat + ' More details in server log...');\n\
-    }, function(reason) {\n\
+    .then((res) => {\n\
+	  if (res.ok) { return res.text(); }\n\
+	  else alert('Authentication failed. More details in server log...');\n\
+    }, (reason) => {\n\
       alert(reason);\n\
+    })\n\
+    .then((token) => {\n\
+      console.log('text=',token);document.cookie='modfido2session='+token+';SameSite=Strict';window.location.reload();\n\
     });\n\
   </script>\n\
 </body></html>\n\
@@ -432,20 +435,24 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	jwt_add_grant(jwt, "user", uent->name);
 	jwt_add_grant_int(jwt, "iat", now);
 	jwt_add_grant_int(jwt, "exp", now + conf->token_validity);
-
-	req->user = (char*)uent->name;
 	ap_set_content_type(req, "application/json");
-	apr_table_setn(req->err_headers_out, "WWW-Authenticate",
-				   apr_pstrcat(req->pool, "Bearer realm=\"",
-							   ap_auth_name(req),"\"", NULL));
-	ap_rprintf(req, "{\"token\":\"%s\"}", jwt_encode_str(jwt));
+	ap_rprintf(req, "%s", jwt_encode_str(jwt));
+	debug("return token=%s val=%s", jwt_dump_str(jwt,0), jwt_encode_str(jwt));
 	jwt_free(jwt);
 
-	return OK; // or HTTP_UNAUTHORIZED to force passing token?
+	req->user = (char*)uent->name;
+	return DONE;
 }
 
 static void set_auth_error(request_rec *req, const char *err, const char *text)
 {
+	char *cookie = apr_psprintf(req->pool, "modfido2session=;%s"
+						  "HttpOnly;SameSite=Strict",
+						  streq(req->hostname, "localhost") ? "" : "Secure;");
+
+	error("check_token failed: %s: %s", err, text);
+	/* clear the cookie to allow re-authentication */
+	apr_table_setn(req->err_headers_out, "Set-Cookie", cookie);
 	apr_table_setn(req->err_headers_out, "WWW-Authenticate",
 				   apr_pstrcat(req->pool,
 							   "Bearer realm=\"", ap_auth_name(req),"\", "
@@ -461,13 +468,13 @@ static int check_token(request_rec *req, fido2_config_t *conf,
 	const char *p;
 	long expire;
 
+	debug("jwt token str = %s", tokstr);
 	if (jwt_decode(&jwt, tokstr, jwtkey, JWTKEY_LEN)) {
-		error("token decoding failed");
 		set_auth_error(req, "invalid_token",
 					   "token is malformed or signature invalid");
 		return HTTP_UNAUTHORIZED;
 	}
-	if (jwt && jwt_get_alg(jwt) == JWT_ALG_HS256) {
+	if (jwt_get_alg(jwt) != JWT_ALG_HS256) {
 		set_auth_error(req, "invalid_token", "bad signature algorithm");
 		return HTTP_UNAUTHORIZED;
 	}
@@ -491,6 +498,7 @@ static int check_token(request_rec *req, fido2_config_t *conf,
 	}
 	
 	*user = apr_pstrdup(req->pool, jwt_get_grant(jwt, "user"));
+	debug("check_token: ok, user=%s", *user);
 	return OK;
 }
 
@@ -500,7 +508,7 @@ static int fido2_handler(request_rec *req)
 		ap_get_module_config(req->per_dir_config, &authnz_fido2_module);
     const char *auth_type = ap_auth_type(req);
     const char *auth_name = ap_auth_name(req);
-	char *auth_line;
+	char *session;
 
 	debug("called, auth_type='%s'", auth_type);
 	if (!auth_type || strcasecmp(auth_type, "fido2") != 0)
@@ -510,15 +518,23 @@ static int fido2_handler(request_rec *req)
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 	
-	/* Check the HTTP header */
-	auth_line = (char*)apr_table_get(
-		req->headers_in,
-		(req->proxyreq == PROXYREQ_PROXY) ?
-		  "Proxy-Authorization" : "Authorization");
-   if (!auth_line) {
+	/* Check for session cookie with access token */
+	session = parse_cookie(req, "modfido2session");
+	if (session && *session) {
+	   char *user;
+	   int rv;
+
+	   /* check JWT */
+	   if ((rv = check_token(req, conf, session, &user)) == OK) {
+		   //apr_table_setn(r->notes, "jwt", (const char*)token);
+		   req->user = user;
+	   }
+	   return rv;
+	}
+	else {
 	   /* If there's no Authorization: header, redirect this to the login
 		* page */
-	   debug("no Authorization: header");
+	   debug("no session cookie");
 
 	   if (strcmp(req->method, "GET") == 0) {
 		   debug("GET, reply with login HTML");
@@ -531,25 +547,6 @@ static int fido2_handler(request_rec *req)
 		   debug("other method: %s", req->method);
 		   return HTTP_INTERNAL_SERVER_ERROR;
 	   }
-   }
-   else {
-	   /* check JWT */
-	   const char *tokstr;
-	   char *user;
-	   int rv;
-
-	   debug("auth_line='%s'", auth_line);
-	   if (!(tokstr = strprefix(auth_line, "Bearer "))) {
-		   error("Authorization scheme is not 'Bearer'");
-		   set_auth_error(req, "invalid request",
-						  "Authentication type must be 'Bearer'");
-		   return HTTP_UNAUTHORIZED;
-	   }
-	   if ((rv = check_token(req, conf, tokstr, &user)) == OK) {
-		   //apr_table_setn(r->notes, "jwt", (const char*)token);
-		   req->user = user;
-	   }
-	   return rv;
    }
    
     return DECLINED;
