@@ -521,33 +521,33 @@ static int fido2_handler(request_rec *req)
 	/* Check for session cookie with access token */
 	session = parse_cookie(req, "modfido2session");
 	if (session && *session) {
-	   char *user;
-	   int rv;
+		char *user;
+		int rv;
 
-	   /* check JWT */
-	   if ((rv = check_token(req, conf, session, &user)) == OK) {
-		   //apr_table_setn(r->notes, "jwt", (const char*)token);
-		   req->user = user;
-	   }
-	   return rv;
+		/* check JWT */
+		if ((rv = check_token(req, conf, session, &user)) == OK) {
+			//apr_table_setn(r->notes, "jwt", (const char*)token);
+			req->user = user;
+		}
+		return rv;
 	}
 	else {
-	   /* If there's no Authorization: header, redirect this to the login
-		* page */
-	   debug("no session cookie");
+		/* If there's no Authorization: header, redirect this to the login
+		 * page */
+		debug("no session cookie");
 
-	   if (strcmp(req->method, "GET") == 0) {
-		   debug("GET, reply with login HTML");
-		   return send_webauthn_code(req, conf);
-	   }
-	   else if (strcmp(req->method, "POST") == 0) {
-		   return process_webauthn_reply(req, conf);
-	   }
-	   else {
-		   debug("other method: %s", req->method);
-		   return HTTP_INTERNAL_SERVER_ERROR;
-	   }
-   }
+		if (strcmp(req->method, "GET") == 0) {
+			debug("GET, reply with login HTML");
+			return send_webauthn_code(req, conf);
+		}
+		else if (strcmp(req->method, "POST") == 0) {
+			return process_webauthn_reply(req, conf);
+		}
+		else {
+			debug("other method: %s", req->method);
+			return HTTP_INTERNAL_SERVER_ERROR;
+		}
+	}
    
     return DECLINED;
 }
