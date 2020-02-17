@@ -136,8 +136,6 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	char challenge_str[CHALLENGE_LEN*2];
 	char allowed_ids[1024] = "";
 
-	// XXX: use username-less flag for rp_id vs. allowCredentials
-
 	/* a simple HMAC with a short key (128b currently) should be enough to
 	 * avoid challenge trickeries */
 	RAND_bytes(challenge, CHALLENGE_LEN);
@@ -306,11 +304,15 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 
-	/* XXX: check if credential.id is one of the allowCredentials, if that
-	 * has been given */
+	/* NB: The WebAuthn standard says in 7.2.1 "If the allowCredentials option
+	 * was given, verify that credential.id identifies one of those that were
+	 * listed in allowCredentials." This is deliberately not implemented here,
+	 * as we either give no credentials in that list, or all of them; so this
+	 * check is pointless. */
+
 	/* XXX: maybe some fido_assert_* functions can be used to make some of
 	 * the checks below */
-	
+
 	if (strcmp(ar.cd_type, "webauthn.get") != 0) {
 		error("parse error in posted assertation data: %s", errstr);
 		return HTTP_BAD_REQUEST;
