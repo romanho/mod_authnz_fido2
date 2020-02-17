@@ -27,14 +27,20 @@
 
 
 typedef struct {
-	const char *user_file;
 	const char *rpid_str;
 	uint8_t rpid_hash[SHA256_LEN];
-	unsigned offer_all_users;
-	unsigned require_UV;
-    int timeout;
-	unsigned token_validity;
+	const char *user_file;
+	const char *cookie_name;
+	int offer_all_users;
+	int require_UV;
+    int auth_timeout;
+	int token_validity;
 } fido2_config_t;
+
+#define DEFAULT_OFFER_ALL	0
+#define DEFAULT_REQUIRE_UV	0
+#define DEFAULT_AUTH_TIMEOUT	30
+#define DEFAULT_TOKEN_VALID	60
 
 typedef struct {
 	const char *name;

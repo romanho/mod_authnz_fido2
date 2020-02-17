@@ -113,7 +113,7 @@ static const char *login_html = "\
       alert(reason);\n\
     })\n\
     .then((token) => {\n\
-      console.log('text=',token);document.cookie='modfido2session='+token+';SameSite=Strict';window.location.reload();\n\
+      document.cookie='%s='+token+';SameSite=Strict';window.location.reload();\n\
     });\n\
   </script>\n\
 </body></html>\n\
@@ -135,6 +135,7 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	char hmac_str[SHA256_LEN*2];
 	char challenge_str[CHALLENGE_LEN*2];
 	char allowed_ids[1024] = "";
+	const char *cookie_name = conf->cookie_name ?: "modfido2session";
 
 	/* a simple HMAC with a short key (128b currently) should be enough to
 	 * avoid challenge trickeries */
@@ -175,7 +176,7 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 		"} }",
 		get_rpid(req, conf),
 		conf->require_UV ? "required" : "discouraged",
-		(conf->timeout >= 0 ? conf->timeout : 30) * 1000,
+		conf->auth_timeout * 1000,
 		challenge_str,
 		allowed_ids
 		);
@@ -183,7 +184,7 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	req->user = "nobody";
 	ap_set_content_type(req, "text/html; charset=US-ASCII");
 	apr_table_setn(req->headers_out, "Cache-Control", "no-cache");
-	ap_rprintf(req, login_html, obj_str, req->uri, hmac_str);
+	ap_rprintf(req, login_html, obj_str, req->uri, hmac_str, cookie_name);
 
 	memset(hmac_str, 0, sizeof(hmac_str));
 	memset(challenge_str, 0, sizeof(challenge_str));
@@ -446,11 +447,14 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	return DONE;
 }
 
-static void set_auth_error(request_rec *req, const char *err, const char *text)
+static void set_auth_error(request_rec *req, fido2_config_t *conf,
+						   const char *err, const char *text)
 {
-	char *cookie = apr_psprintf(req->pool, "modfido2session=;%s"
-						  "HttpOnly;SameSite=Strict",
-						  streq(req->hostname, "localhost") ? "" : "Secure;");
+	const char *cookie_name = conf->cookie_name ?: "modfido2session";
+	char *cookie = apr_psprintf(req->pool, "%s=;%s"
+								"HttpOnly;SameSite=Strict",
+								cookie_name,
+								streq(req->hostname, "localhost") ? "" : "Secure;");
 
 	error("check_token failed: %s: %s", err, text);
 	/* clear the cookie to allow re-authentication */
@@ -472,30 +476,30 @@ static int check_token(request_rec *req, fido2_config_t *conf,
 
 	debug("jwt token str = %s", tokstr);
 	if (jwt_decode(&jwt, tokstr, jwtkey, JWTKEY_LEN)) {
-		set_auth_error(req, "invalid_token",
+		set_auth_error(req, conf, "invalid_token",
 					   "token is malformed or signature invalid");
 		return HTTP_UNAUTHORIZED;
 	}
 	if (jwt_get_alg(jwt) != JWT_ALG_HS256) {
-		set_auth_error(req, "invalid_token", "bad signature algorithm");
+		set_auth_error(req, conf, "invalid_token", "bad signature algorithm");
 		return HTTP_UNAUTHORIZED;
 	}
 	if (!(p = jwt_get_grant(jwt, "iss")) || !streq(p, rpid)) {
-		set_auth_error(req, "invalid_token", "token issuer invalid");
+		set_auth_error(req, conf, "invalid_token", "token issuer invalid");
 		return HTTP_UNAUTHORIZED;
 	}
 	if (!(p = jwt_get_grant(jwt, "aud")) || !streq(p, rpid)) {
-		set_auth_error(req, "invalid_token", "token audience invalid");
+		set_auth_error(req, conf, "invalid_token", "token audience invalid");
 		return HTTP_UNAUTHORIZED;
 	}
 	
 	expire = jwt_get_grant_int(jwt, "exp");
 	if (expire <= 0) {
-		set_auth_error(req, "invalid_token", "token expiration missing");
+		set_auth_error(req, conf, "invalid_token", "token expiration missing");
 		return HTTP_UNAUTHORIZED;
 	}
 	if (expire < time(NULL)) {
-		set_auth_error(req, "invalid_token", "token expired");
+		set_auth_error(req, conf, "invalid_token", "token expired");
 		return HTTP_UNAUTHORIZED;
 	}
 	
@@ -508,6 +512,7 @@ static int fido2_handler(request_rec *req)
 {
 	fido2_config_t *conf =
 		ap_get_module_config(req->per_dir_config, &authnz_fido2_module);
+	const char *cookie_name = conf->cookie_name ?: "modfido2session";
     const char *auth_type = ap_auth_type(req);
     const char *auth_name = ap_auth_name(req);
 	char *session;
@@ -521,7 +526,7 @@ static int fido2_handler(request_rec *req)
 	}
 	
 	/* Check for session cookie with access token */
-	session = parse_cookie(req, "modfido2session");
+	session = parse_cookie(req, cookie_name);
 	if (session && *session) {
 		char *user;
 		int rv;
