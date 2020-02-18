@@ -13,8 +13,6 @@
 #include <httpd.h>
 #include <http_config.h>
 
-#define EXPORT __attribute__((__visibility__("default")))
-
 #define CHALLENGE_LEN	32
 #define KEY_CHALLENGE	"mod_authn_fido2:challenge"
 #define SHA256_LEN		32
