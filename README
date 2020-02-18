@@ -1,6 +1,0 @@
-mod_authnz_fido2 is an Apache 2.4 module for authorization by FIDO2 protocol,
-without using an standalone WebAuthn server process.
-
-All this is work in progress...
-
-Build with: autoreconf -is && ./configure && make
