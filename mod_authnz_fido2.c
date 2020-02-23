@@ -41,8 +41,8 @@
 #define VERSION 	"0.1"
 
 typedef struct {
-	uint8_t *chmac;
-	size_t  chmac_len;
+	uint8_t *sessiondata;
+	size_t  sessiondata_len;
 	char *credid;
 	uint8_t *authdata;
 	size_t  authdata_len;
@@ -254,7 +254,7 @@ static const char *parse_assertation(request_rec *req, uint8_t *buf, size_t len,
 
 	if (!top || !json_is_object(top))
 		return apr_pstrdup(req->pool, jerr.text);
-	get_base64_attr(top, "sessiondata", resp->chmac);
+	get_base64_attr(top, "sessiondata", resp->sessiondata);
 	get_str_attr(top, "credentialId", resp->credid);
 	get_base64_attr(top, "authenticatorData", resp->authdata);
 	get_base64_attr(top, "signature", resp->signature);
@@ -331,12 +331,12 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 
 	/* check challenge HMAC */
 	if (ar.cd_challenge_len != CHALLENGE_LEN ||
-		ar.chmac_len != SHA256_LEN) {
+		ar.sessiondata_len != SHA256_LEN) {
 		error("bad challenge sizes in response");
 		return HTTP_BAD_REQUEST;
 	}
 	sha256_2buf(ar.cd_challenge, CHALLENGE_LEN, chmackey, CHMACKEY_LEN, hash);
-	if (memcmp(ar.chmac, hash, SHA256_LEN) != 0) {
+	if (memcmp(ar.sessiondata, hash, SHA256_LEN) != 0) {
 		error("bad challenge in reply (not from us)");
 		return HTTP_BAD_REQUEST;
 	}
