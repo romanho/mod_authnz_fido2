@@ -140,6 +140,8 @@ int sha256(const uint8_t *in, size_t inlen, uint8_t *out)
 		goto out;
 	if (!EVP_DigestFinal_ex(ctx, out, &reallen))
 		goto out;
+	if (reallen != SHA256_LEN)
+		goto out;
 	rv = 0;
 
   out:
@@ -163,6 +165,36 @@ int sha256_2buf(const uint8_t *in1, size_t in1len, const uint8_t *in2, size_t in
 	if (!EVP_DigestUpdate(ctx, in2, in2len))
 		goto out;
 	if (!EVP_DigestFinal_ex(ctx, out, &reallen))
+		goto out;
+	if (reallen != SHA256_LEN)
+		goto out;
+	rv = 0;
+
+  out:
+	EVP_MD_CTX_destroy(ctx);
+	return rv;
+}
+
+int sha256_3buf(const uint8_t *in1, size_t in1len, const uint8_t *in2, size_t in2len, const uint8_t *in3, size_t in3len, uint8_t *out)
+{
+	EVP_MD_CTX *ctx;
+	int rv = -1;
+	unsigned reallen;
+
+	if (!(ctx = EVP_MD_CTX_create()))
+		return -1;
+
+	if (!EVP_DigestInit_ex(ctx, EVP_sha256(), NULL))
+		goto out;
+	if (!EVP_DigestUpdate(ctx, in1, in1len))
+		goto out;
+	if (!EVP_DigestUpdate(ctx, in2, in2len))
+		goto out;
+	if (!EVP_DigestUpdate(ctx, in3, in3len))
+		goto out;
+	if (!EVP_DigestFinal_ex(ctx, out, &reallen))
+		goto out;
+	if (reallen != SHA256_LEN)
 		goto out;
 	rv = 0;
 

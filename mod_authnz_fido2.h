@@ -76,6 +76,7 @@ char *parse_cookie(request_rec *req, const char *cookiename);
 void base64url2normal(char *str);
 int sha256(const uint8_t *in, size_t inlen, uint8_t *out);
 int sha256_2buf(const uint8_t *in1, size_t in1len, const uint8_t *in2, size_t in2len, uint8_t *out);
+int sha256_3buf(const uint8_t *in1, size_t in1len, const uint8_t *in2, size_t in2len, const uint8_t *in3, size_t in3len, uint8_t *out);
 int sha256_str(const char *str, uint8_t *out);
 void log_bytearray(request_rec *req, const char *prefix, uint8_t *data, size_t len);
 

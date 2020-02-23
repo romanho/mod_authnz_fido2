@@ -71,6 +71,7 @@ typedef struct {
 
 #define JWTKEY_LEN 32
 #define CHMACKEY_LEN 16
+#define CHMACSTAMP_LEN sizeof(time_t)
 static uint8_t *jwtkey;
 static uint8_t *chmackey;
 
@@ -131,17 +132,32 @@ static const char *get_rpid(request_rec *req, fido2_config_t *conf)
 static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 {
 	uint8_t challenge[CHALLENGE_LEN];
-	uint8_t hash[SHA256_LEN];
-	char hmac_str[SHA256_LEN*2];
+	uint8_t hash[CHMACSTAMP_LEN+SHA256_LEN];
+	time_t  stamp;
+	char sessiondata_str[SHA256_LEN*2];
 	char challenge_str[CHALLENGE_LEN*2];
 	char allowed_ids[1024] = "";
 	const char *cookie_name = conf->cookie_name ?: "modfido2session";
 
-	/* a simple HMAC with a short key (128b currently) should be enough to
-	 * avoid challenge trickeries */
+	/* A simple HMAC with a short key (128b currently) and a timestamp
+	 * should be enough to avoid challenge trickeries.
+	 * The layout for hashing and sessiondata is:
+	 *
+	 *    chall (32B)  time (4B)  hmackey (16B)
+	 *    |            |       |              |
+	 *    +------------------------hashed-----+ => hash (32B)
+	 *                 |       |                   |        |
+	 *                 +-------+  =>  base64  <=   +--------+
+	 *                             sessiondata
+	 */
 	RAND_bytes(challenge, CHALLENGE_LEN);
-	sha256_2buf(challenge, CHALLENGE_LEN, chmackey, CHMACKEY_LEN, hash);
-	apr_base64_encode(hmac_str, hash, SHA256_LEN);
+	time(&stamp);
+	memcpy(hash, &stamp, CHMACSTAMP_LEN);
+	sha256_3buf(challenge, CHALLENGE_LEN,
+				(uint8_t*)&stamp, CHMACSTAMP_LEN,
+				chmackey, CHMACKEY_LEN,
+				hash+CHMACSTAMP_LEN);
+	apr_base64_encode(sessiondata_str, hash, CHMACSTAMP_LEN+SHA256_LEN);
 	apr_base64_encode(challenge_str, challenge, CHALLENGE_LEN);
 	memset(challenge, 0, sizeof(challenge));
 
@@ -184,9 +200,9 @@ static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 	req->user = "nobody";
 	ap_set_content_type(req, "text/html; charset=US-ASCII");
 	apr_table_setn(req->headers_out, "Cache-Control", "no-cache");
-	ap_rprintf(req, login_html, obj_str, req->uri, hmac_str, cookie_name);
+	ap_rprintf(req, login_html, obj_str, req->uri, sessiondata_str, cookie_name);
 
-	memset(hmac_str, 0, sizeof(hmac_str));
+	memset(sessiondata_str, 0, sizeof(sessiondata_str));
 	memset(challenge_str, 0, sizeof(challenge_str));
 	return DONE;
 }
@@ -293,6 +309,8 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	assert_resp_t ar;
 	const char *errstr;
 	uint8_t hash[SHA256_LEN];
+	apr_time_t now = apr_time_sec(apr_time_now());
+	time_t stamp;
 	
 	if (!ctype || strcmp(ctype, "application/json") != 0) {
 		error("content-type must be application/json");
@@ -330,14 +348,29 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	}
 
 	/* check challenge HMAC */
-	if (ar.cd_challenge_len != CHALLENGE_LEN ||
-		ar.sessiondata_len != SHA256_LEN) {
-		error("bad challenge sizes in response");
+	if (ar.cd_challenge_len != CHALLENGE_LEN) {
+		error("bad challenge size in response");
 		return HTTP_BAD_REQUEST;
 	}
-	sha256_2buf(ar.cd_challenge, CHALLENGE_LEN, chmackey, CHMACKEY_LEN, hash);
-	if (memcmp(ar.sessiondata, hash, SHA256_LEN) != 0) {
-		error("bad challenge in reply (not from us)");
+	if (ar.sessiondata_len != CHMACSTAMP_LEN+SHA256_LEN) {
+		error("bad sessiondata size in response");
+		return HTTP_BAD_REQUEST;
+	}
+	sha256_3buf(ar.cd_challenge, CHALLENGE_LEN,
+				ar.sessiondata, CHMACSTAMP_LEN,
+				chmackey, CHMACKEY_LEN, hash);
+	if (memcmp(ar.sessiondata+CHMACSTAMP_LEN, hash, SHA256_LEN) != 0) {
+		error("challenge HMAC failure in reply");
+		return HTTP_BAD_REQUEST;
+	}
+	memcpy(&stamp, ar.sessiondata, CHMACSTAMP_LEN); // copy for alignment
+	/* The timestamp in sessiondata (= when challenge has been generated)
+	 * must be not older then the authentication timeout plus a generous 15s
+	 * for network delays. It also must not be in future.
+	 */
+	//debug("sessiondata tstamp=%ld age=%ld", stamp, now-stamp);
+	if (stamp > now || stamp < now - conf->auth_timeout - 15) {
+		error("challenge in reply outside allowed time range");
 		return HTTP_BAD_REQUEST;
 	}
 
@@ -369,7 +402,7 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		error("unknown credential ID %s", ar.credid);
 		return HTTP_BAD_REQUEST;
 	}
-	debug("credID=%s -> user %s", ar.credid, uent->name);
+	//debug("credID=%s -> user %s", ar.credid, uent->name);
 	
 	/* hash authdata || clientdata */
 	sha256(ar.cdata, ar.cdata_len, hash);
@@ -422,7 +455,6 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	
 	/* after the checks: generate a JWT ticket */
 	jwt_t *jwt;
-	apr_time_t now = apr_time_sec(apr_time_now());
 	
  	if (jwt_new(&jwt)) {
 		error("creating token: %s", strerror(errno));
