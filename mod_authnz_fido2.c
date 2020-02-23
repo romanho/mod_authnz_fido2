@@ -109,13 +109,14 @@ static const char *login_html = "\
       })})\n\
     .then((res) => {\n\
 	  if (res.ok) { return res.text(); }\n\
-	  else alert('Authentication failed. More details in server log...');\n\
+	  else { alert('Authentication failed.'); throw 'failed'; }\n\
     }, (reason) => {\n\
-      alert(reason);\n\
+      alert(reason); throw 'failed';\n\
     })\n\
     .then((token) => {\n\
-      document.cookie='%s='+token+';SameSite=Strict';window.location.reload();\n\
-    });\n\
+      document.cookie='%s='+token;\n\
+      window.location.reload();\n\
+    }, (reason) => {});\n\
   </script>\n\
 </body></html>\n\
 ";
@@ -470,8 +471,17 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	jwt_add_grant(jwt, "user", uent->name);
 	jwt_add_grant_int(jwt, "iat", now);
 	jwt_add_grant_int(jwt, "exp", now + conf->token_validity);
+
+	/* Some browsers store cookies twice if the path is just a little bit
+	 * different, e.g. by trailing '/' */
+	char *path = apr_pstrdup(req->pool, req->uri);
+	remove_slashes(path);
+	
 	ap_set_content_type(req, "application/json");
-	ap_rprintf(req, "%s", jwt_encode_str(jwt));
+	ap_rprintf(req, "%s;Path=%s;SameSite=Strict%s",
+			   jwt_encode_str(jwt),
+			   path,
+			   streq(req->hostname, "localhost") ? "" : ";Secure");
 	debug("return token=%s val=%s", jwt_dump_str(jwt,0), jwt_encode_str(jwt));
 	jwt_free(jwt);
 
@@ -483,14 +493,17 @@ static void set_auth_error(request_rec *req, fido2_config_t *conf,
 						   const char *err, const char *text)
 {
 	const char *cookie_name = conf->cookie_name ?: "modfido2session";
-	char *cookie = apr_psprintf(req->pool, "%s=;%s"
-								"HttpOnly;SameSite=Strict",
-								cookie_name,
-								streq(req->hostname, "localhost") ? "" : "Secure;");
+	char *cookie = apr_psprintf
+				   (req->pool, "%s=;%s;SameSite=Strict",
+					cookie_name,
+					streq(req->hostname, "localhost") ? "" : "Secure;");
 
 	error("check_token failed: %s: %s", err, text);
 	/* clear the cookie to allow re-authentication */
+	// XXX: this automatically sets the cookie path; I'd rather use the
+	// AuthName, is that possible??
 	apr_table_setn(req->err_headers_out, "Set-Cookie", cookie);
+	// XXX: must do something different for error now Bearer isn't used anymore
 	apr_table_setn(req->err_headers_out, "WWW-Authenticate",
 				   apr_pstrcat(req->pool,
 							   "Bearer realm=\"", ap_auth_name(req),"\", "
@@ -506,7 +519,7 @@ static int check_token(request_rec *req, fido2_config_t *conf,
 	const char *p;
 	long expire;
 
-	debug("jwt token str = %s", tokstr);
+	//debug("jwt token str = %s", tokstr);
 	if (jwt_decode(&jwt, tokstr, jwtkey, JWTKEY_LEN)) {
 		set_auth_error(req, conf, "invalid_token",
 					   "token is malformed or signature invalid");
@@ -564,22 +577,20 @@ static int fido2_handler(request_rec *req)
 		int rv;
 
 		/* check JWT */
-		if ((rv = check_token(req, conf, session, &user)) == OK) {
-			//apr_table_setn(r->notes, "jwt", (const char*)token);
+		if ((rv = check_token(req, conf, session, &user)) == OK)
 			req->user = user;
-		}
 		return rv;
 	}
 	else {
-		/* If there's no Authorization: header, redirect this to the login
-		 * page */
-		debug("no session cookie");
-
+		/* If there's no Authorization: header, redirect GET to login page
+		 * and process reply in POST handler
+		 */
 		if (strcmp(req->method, "GET") == 0) {
-			debug("GET, reply with login HTML");
+			debug("no session, GET, reply with login HTML");
 			return send_webauthn_code(req, conf);
 		}
 		else if (strcmp(req->method, "POST") == 0) {
+			debug("no session, POST, process auth data");
 			return process_webauthn_reply(req, conf);
 		}
 		else {

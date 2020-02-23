@@ -125,6 +125,13 @@ void base64url2normal(char *str)
 		}
 }
 
+void remove_slashes(char *str)
+{
+	char *p = str+strlen(str)-1;
+	while(p > str && *p == '/')
+		*p-- = '\0';
+}
+
 int sha256(const uint8_t *in, size_t inlen, uint8_t *out)
 {
 	EVP_MD_CTX *ctx;
@@ -226,9 +233,3 @@ void log_bytearray(request_rec *req, const char *prefix, uint8_t *data, size_t l
 	if (len % 16)
 		debug("%s %04x: %s", prefix, i&~0xf, buf);
 }
-
-
-
-
-
-
