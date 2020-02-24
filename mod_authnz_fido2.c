@@ -32,7 +32,6 @@
 #include <openssl/pem.h>
 #include <openssl/err.h>
 #include <jansson.h>
-#include <jwt.h>
 
 #include "mod_authnz_fido2.h"
 
@@ -69,10 +68,7 @@ typedef struct {
 	unsigned counter;
 } authenticator_data_t;
 
-#define JWTKEY_LEN 32
-#define CHMACKEY_LEN 16
-#define CHMACSTAMP_LEN sizeof(time_t)
-static uint8_t *jwtkey;
+uint8_t *jwtkey;
 static uint8_t *chmackey;
 
 module AP_MODULE_DECLARE_DATA authnz_fido2_module;
@@ -124,11 +120,6 @@ static const char *login_html = "\
 
 /* ---------------------------------------------------------------------- */
 
-
-static const char *get_rpid(request_rec *req, fido2_config_t *conf)
-{
-	return conf->rpid_str ?: req->hostname;
-}
 
 static int send_webauthn_code(request_rec *req, fido2_config_t *conf)
 {
@@ -303,7 +294,6 @@ static void decode_authenticator_data(authenticator_data_t *out,
 static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 {
 	const char *ctype = apr_table_get(req->headers_in, "Content-Type");
-	const char *rpid = get_rpid(req, conf);
 	const char *p;
 	char *postdata;
 	apr_off_t postlen;
@@ -453,104 +443,15 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		debug("OpenSSL error %lu: %s", e, ebuf);
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
-	
-	/* after the checks: generate a JWT ticket */
-	jwt_t *jwt;
-	
- 	if (jwt_new(&jwt)) {
-		error("creating token: %s", strerror(errno));
-		return HTTP_INTERNAL_SERVER_ERROR;
-	}
-	/* XXX: key rotation */
-	if (jwt_set_alg(jwt, JWT_ALG_HS256, jwtkey, JWTKEY_LEN)) {
-		error("token_set_alg failed");
-		return HTTP_INTERNAL_SERVER_ERROR;
-	}
-	jwt_add_grant(jwt, "iss", rpid);
-	jwt_add_grant(jwt, "aud", rpid);
-	jwt_add_grant(jwt, "user", uent->name);
-	jwt_add_grant_int(jwt, "iat", now);
-	jwt_add_grant_int(jwt, "exp", now + conf->token_validity);
 
-	/* Some browsers store cookies twice if the path is just a little bit
-	 * different, e.g. by trailing '/' */
-	char *path = apr_pstrdup(req->pool, req->uri);
-	remove_slashes(path);
-	
+	char *token_str;
+	if (!(token_str = create_token(req, conf, uent)))
+		return HTTP_INTERNAL_SERVER_ERROR;
 	ap_set_content_type(req, "application/json");
-	ap_rprintf(req, "%s;Path=%s;SameSite=Strict%s",
-			   jwt_encode_str(jwt),
-			   path,
-			   streq(req->hostname, "localhost") ? "" : ";Secure");
-	debug("return token=%s val=%s", jwt_dump_str(jwt,0), jwt_encode_str(jwt));
-	jwt_free(jwt);
+	ap_rwrite(token_str, strlen(token_str), req);
 
 	req->user = (char*)uent->name;
 	return DONE;
-}
-
-static void set_auth_error(request_rec *req, fido2_config_t *conf,
-						   const char *err, const char *text)
-{
-	const char *cookie_name = conf->cookie_name ?: "modfido2session";
-	char *cookie = apr_psprintf
-				   (req->pool, "%s=;%s;SameSite=Strict",
-					cookie_name,
-					streq(req->hostname, "localhost") ? "" : "Secure;");
-
-	error("check_token failed: %s: %s", err, text);
-	/* clear the cookie to allow re-authentication */
-	// XXX: this automatically sets the cookie path; I'd rather use the
-	// AuthName, is that possible??
-	apr_table_setn(req->err_headers_out, "Set-Cookie", cookie);
-	// XXX: must do something different for error now Bearer isn't used anymore
-	apr_table_setn(req->err_headers_out, "WWW-Authenticate",
-				   apr_pstrcat(req->pool,
-							   "Bearer realm=\"", ap_auth_name(req),"\", "
-							   "error=\", err, \", "
-							   "error_description=\"", text, "\"", NULL));
-}
-
-static int check_token(request_rec *req, fido2_config_t *conf,
-					   const char *tokstr, char **user)
-{
-	jwt_t *jwt;
-	const char *rpid = get_rpid(req, conf);
-	const char *p;
-	long expire;
-
-	//debug("jwt token str = %s", tokstr);
-	if (jwt_decode(&jwt, tokstr, jwtkey, JWTKEY_LEN)) {
-		set_auth_error(req, conf, "invalid_token",
-					   "token is malformed or signature invalid");
-		return HTTP_UNAUTHORIZED;
-	}
-	if (jwt_get_alg(jwt) != JWT_ALG_HS256) {
-		set_auth_error(req, conf, "invalid_token", "bad signature algorithm");
-		return HTTP_UNAUTHORIZED;
-	}
-	if (!(p = jwt_get_grant(jwt, "iss")) || !streq(p, rpid)) {
-		set_auth_error(req, conf, "invalid_token", "token issuer invalid");
-		return HTTP_UNAUTHORIZED;
-	}
-	if (!(p = jwt_get_grant(jwt, "aud")) || !streq(p, rpid)) {
-		set_auth_error(req, conf, "invalid_token", "token audience invalid");
-		return HTTP_UNAUTHORIZED;
-	}
-	
-	expire = jwt_get_grant_int(jwt, "exp");
-	if (expire <= 0) {
-		set_auth_error(req, conf, "invalid_token", "token expiration missing");
-		return HTTP_UNAUTHORIZED;
-	}
-	if (expire < time(NULL)) {
-		set_auth_error(req, conf, "invalid_token", "token expired");
-		return HTTP_UNAUTHORIZED;
-	}
-	
-	*user = apr_pstrdup(req->pool, jwt_get_grant(jwt, "user"));
-	debug("check_token: ok, user=%s", *user);
-	return OK;
 }
 
 static int fido2_handler(request_rec *req)
@@ -565,6 +466,7 @@ static int fido2_handler(request_rec *req)
 	debug("called, auth_type='%s'", auth_type);
 	if (!auth_type || strcasecmp(auth_type, "fido2") != 0)
 		return DECLINED;
+	// XXX still needed?
 	if (!auth_name) {
 		error("no AuthName defined");
 		return HTTP_INTERNAL_SERVER_ERROR;

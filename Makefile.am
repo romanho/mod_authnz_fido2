@@ -9,7 +9,7 @@ AM_CFLAGS = -g -Wall -Wno-pointer-sign \
 		  	${APACHE_CFLAGS} ${JWT_CFLAGS} ${JANSSON_CFLAGS} ${FIDO_CFLAGS}
 AM_LDFLAGS = ${JWT_LIBS} ${JANSSON_LDFLAGS} ${FIDO_LIBS} ${APR_LDFLAGS}
 
-libmodauthnzfido2_la_SOURCES = mod_authnz_fido2.c conf.c util.c
+libmodauthnzfido2_la_SOURCES = mod_authnz_fido2.c conf.c token.c util.c
 fido2_useradd_SOURCES = fido2-useradd.c
 
 install-exec-local:

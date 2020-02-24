@@ -14,8 +14,10 @@
 #include <http_config.h>
 
 #define CHALLENGE_LEN	32
-#define KEY_CHALLENGE	"mod_authn_fido2:challenge"
 #define SHA256_LEN		32
+#define JWTKEY_LEN		32
+#define CHMACKEY_LEN	16
+#define CHMACSTAMP_LEN	sizeof(time_t)
 
 #define ADF_UP 0x01	/* user present */
 #define ADF_UV 0x04	/* user verified */
@@ -63,15 +65,23 @@ static __inline__ const char *strprefix(const char *a, const char *b) {
 #define error(fmt, args...) \
 	ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, req, "%s: " fmt, __func__, ##args)
 
+/* globals */
+extern uint8_t *jwtkey;
+
 /* conf.c */
 void *create_authnz_fido2_config(apr_pool_t *p, char *dirspec);
 void *merge_authnz_fido2_config(apr_pool_t *p, void *base_conf, void *add_conf);
 extern const command_rec authnz_fido2_cmds[];
 
+/* token.c */
+char *create_token(request_rec *req, fido2_config_t *conf, fido2_user_t *uent);
+int check_token(request_rec *req, fido2_config_t *conf, const char *tokstr, char **user);
+
 /* util.c */
 fido2_user_t *getuser_byname(request_rec *req, fido2_config_t *conf, const char *name);
 fido2_user_t *getuser_bycredid(request_rec *req, fido2_config_t *conf, const char *credid);
 void for_all_users(request_rec *req, fido2_config_t *conf, int (*callback)(const fido2_user_t *u));
+const char *get_rpid(request_rec *req, fido2_config_t *conf);
 char *parse_cookie(request_rec *req, const char *cookiename);
 void base64url2normal(char *str);
 void remove_slashes(char *str);

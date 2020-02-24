@@ -92,6 +92,11 @@ void for_all_users(request_rec *req, fido2_config_t *conf, int (*callback)(const
 	getuser_byXXX(req, conf, NULL, 0, callback);
 }
 
+const char *get_rpid(request_rec *req, fido2_config_t *conf)
+{
+	return conf->rpid_str ?: req->hostname;
+}
+
 char *parse_cookie(request_rec *req, const char *cookiename)
 {
 	const char *cookie = (char*)apr_table_get(req->headers_in, "Cookie");
