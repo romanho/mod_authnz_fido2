@@ -16,6 +16,7 @@
 #define CHALLENGE_LEN	32
 #define SHA256_LEN		32
 #define JWTKEY_LEN		32
+#define JWTKEY_NUM		2
 #define CHMACKEY_LEN	16
 #define CHMACSTAMP_LEN	sizeof(time_t)
 
@@ -35,12 +36,14 @@ typedef struct {
 	int require_UV;
     int auth_timeout;
 	int token_validity;
+	int jwtkey_lifetime;
 } fido2_config_t;
 
-#define DEFAULT_OFFER_ALL	0
-#define DEFAULT_REQUIRE_UV	0
+#define DEFAULT_OFFER_ALL		0
+#define DEFAULT_REQUIRE_UV		0
 #define DEFAULT_AUTH_TIMEOUT	30
-#define DEFAULT_TOKEN_VALID	60
+#define DEFAULT_TOKEN_VALID		60
+#define DEFAULT_JWTKEY_LIFETIME	60
 
 typedef struct {
 	const char *name;
@@ -65,15 +68,13 @@ static __inline__ const char *strprefix(const char *a, const char *b) {
 #define error(fmt, args...) \
 	ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, req, "%s: " fmt, __func__, ##args)
 
-/* globals */
-extern uint8_t *jwtkey;
-
 /* conf.c */
 void *create_authnz_fido2_config(apr_pool_t *p, char *dirspec);
 void *merge_authnz_fido2_config(apr_pool_t *p, void *base_conf, void *add_conf);
 extern const command_rec authnz_fido2_cmds[];
 
 /* token.c */
+void jwtkey_init(uint8_t *mem);
 char *create_token(request_rec *req, fido2_config_t *conf, fido2_user_t *uent);
 int check_token(request_rec *req, fido2_config_t *conf, const char *tokstr, char **user);
 

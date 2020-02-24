@@ -15,15 +15,42 @@
 #include <http_core.h>
 #include <http_request.h>
 #include <http_log.h>
+#include <openssl/rand.h>
 #include <jwt.h>
 
 #include "mod_authnz_fido2.h"
+
+static apr_time_t jwtkey_lastrot = 0;
+static unsigned jwtkey_curr = 0;
+static uint8_t *jwtkey;
+
+void jwtkey_init(uint8_t *mem)
+{
+	jwtkey = mem;
+	jwtkey_curr = 0;
+	RAND_bytes(jwtkey, JWTKEY_LEN);
+	jwtkey_lastrot = apr_time_sec(apr_time_now());
+}
+
+static uint8_t *jwtkey_maybe_rotate(request_rec *req, fido2_config_t *conf)
+{
+	apr_time_t now = apr_time_sec(apr_time_now());
+
+	if (now - jwtkey_lastrot > conf->jwtkey_lifetime*60) {
+		jwtkey_curr = (jwtkey_curr + 1) % JWTKEY_NUM;
+		jwtkey_lastrot = now;
+		RAND_bytes(jwtkey+jwtkey_curr*JWTKEY_LEN, JWTKEY_LEN);
+		debug("rotated JWT signing key, now #%u is current", jwtkey_curr);
+	}
+	return jwtkey + jwtkey_curr*JWTKEY_LEN;
+}
 
 
 char *create_token(request_rec *req, fido2_config_t *conf, fido2_user_t *uent)
 {
 	const char *rpid = get_rpid(req, conf);
 	apr_time_t now = apr_time_sec(apr_time_now());
+	uint8_t *jk;
 	jwt_t *jwt;
 	char *path, *str;
 	
@@ -31,8 +58,8 @@ char *create_token(request_rec *req, fido2_config_t *conf, fido2_user_t *uent)
 		error("creating token: %s", strerror(errno));
 		return NULL;
 	}
-	/* XXX: key rotation */
-	if (jwt_set_alg(jwt, JWT_ALG_HS256, jwtkey, JWTKEY_LEN)) {
+	jk = jwtkey_maybe_rotate(req, conf);
+	if (jwt_set_alg(jwt, JWT_ALG_HS256, jk, JWTKEY_LEN)) {
 		error("token_set_alg failed");
 		return NULL;
 	}
@@ -87,9 +114,21 @@ int check_token(request_rec *req, fido2_config_t *conf,
 	const char *p;
 	apr_time_t now = apr_time_sec(apr_time_now());
 	long expire;
+	unsigned i, j;
 
 	//debug("jwt token str = %s", tokstr);
-	if (jwt_decode(&jwt, tokstr, jwtkey, JWTKEY_LEN)) {
+
+	/* Check if any of our keys can decode the token (so we still accept
+	 * previous tokens from before rotation), but start with the current one
+	 * (most likely) and then go backwards.  */
+	for(i = 0; i < JWTKEY_NUM ; ++i) {
+		j = (jwtkey_curr+JWTKEY_NUM-i) % JWTKEY_NUM;
+		if (!jwt_decode(&jwt, tokstr, jwtkey+j*JWTKEY_LEN, JWTKEY_LEN)) {
+			debug("jwtkey #%u decoded correctly", j);
+			break;
+		}
+	}
+	if (i >= JWTKEY_NUM) {
 		set_auth_error(req, conf, "invalid_token",
 					   "token is malformed or signature invalid");
 		return HTTP_UNAUTHORIZED;

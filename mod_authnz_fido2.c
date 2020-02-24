@@ -68,7 +68,6 @@ typedef struct {
 	unsigned counter;
 } authenticator_data_t;
 
-uint8_t *jwtkey;
 static uint8_t *chmackey;
 
 module AP_MODULE_DECLARE_DATA authnz_fido2_module;
@@ -478,7 +477,6 @@ static int fido2_handler(request_rec *req)
 		char *user;
 		int rv;
 
-		/* check JWT */
 		if ((rv = check_token(req, conf, session, &user)) == OK)
 			req->user = user;
 		return rv;
@@ -511,6 +509,7 @@ static int init_mod_fido2(apr_pool_t *pconf, apr_pool_t *plog,
 						  apr_pool_t *ptemp, server_rec *s)
 {
 	request_rec *req = (request_rec*)s; // just for error/warn macros
+	uint8_t *jwtkey_mem;
 	
     ap_add_version_component(pconf, NAME "/" VERSION);
 
@@ -526,13 +525,13 @@ static int init_mod_fido2(apr_pool_t *pconf, apr_pool_t *plog,
 			break;
 		}
 	}
-	if (!(jwtkey = OPENSSL_secure_malloc(JWTKEY_LEN)) ||
+	if (!(jwtkey_mem = OPENSSL_secure_malloc(JWTKEY_LEN*JWTKEY_NUM)) ||
 		!(chmackey = OPENSSL_secure_malloc(CHMACKEY_LEN))) {
 		error("secure_malloc failed");
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
-	RAND_bytes(jwtkey, JWTKEY_LEN);
 	RAND_bytes(chmackey, CHMACKEY_LEN);
+	jwtkey_init(jwtkey_mem);
 
     return OK;
 }

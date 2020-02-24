@@ -44,6 +44,10 @@ const command_rec authnz_fido2_cmds[] = {
 				  (void *)APR_OFFSETOF(fido2_config_t, token_validity),
 				  OR_AUTHCFG,
 				  "Valid time of a token (in minutes)."),
+	AP_INIT_TAKE1("AuthFIDO2TokenKeyLifetime", ap_set_int_slot,
+				  (void *)APR_OFFSETOF(fido2_config_t, jwtkey_lifetime),
+				  OR_AUTHCFG,
+				  "Lifetime (in minutes) of the key for signing tokens."),
 	AP_INIT_FLAG("AuthFIDO2OfferAllUsers", ap_set_flag_slot,
 				 (void *)APR_OFFSETOF(fido2_config_t, offer_all_users),
 				 OR_AUTHCFG,
@@ -68,6 +72,7 @@ void *create_authnz_fido2_config(apr_pool_t *p, char *dirspec)
 	conf->require_UV = -1;
 	conf->auth_timeout = -1;
 	conf->token_validity = -1;
+	conf->jwtkey_lifetime = -1;
 	return conf;
 }
 
@@ -99,6 +104,7 @@ void *merge_authnz_fido2_config(apr_pool_t *p, void *base_conf, void *add_conf)
 	merge_config(require_UV, DEFAULT_REQUIRE_UV);
 	merge_config(auth_timeout, DEFAULT_AUTH_TIMEOUT);
 	merge_config(token_validity, DEFAULT_TOKEN_VALID);
+	merge_config(jwtkey_lifetime, DEFAULT_JWTKEY_LIFETIME);
 	return res;
 }
 
