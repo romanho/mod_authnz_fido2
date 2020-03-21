@@ -215,7 +215,7 @@ static char *apr_get_postdata(request_rec *req, apr_size_t *len)
 			pos += n;				   
 		}
 	}
-	debug("rcv POST data: %s", data);
+	//debug("rcv POST data: %s", data);
 	return data;
 }
 
@@ -298,7 +298,14 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	uint8_t hash[SHA256_LEN];
 	apr_time_t now = apr_time_sec(apr_time_now());
 	time_t stamp;
-	
+	authenticator_data_t authdata;
+	fido2_user_t *uent;
+	int ktype;
+	void *pk;
+	fido_assert_t *ass;
+	int r;
+	char *token_str;
+
 	if (!ctype || strcmp(ctype, "application/json") != 0) {
 		error("content-type must be application/json");
 		return HTTP_UNSUPPORTED_MEDIA_TYPE;
@@ -316,11 +323,8 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	 * as we either give no credentials in that list, or all of them; so this
 	 * check is pointless. */
 
-	/* XXX: maybe some fido_assert_* functions can be used to make some of
-	 * the checks below */
-
 	if (strcmp(ar.cd_type, "webauthn.get") != 0) {
-		error("parse error in posted assertation data: %s", errstr);
+		error("wrong cd_type");
 		return HTTP_BAD_REQUEST;
 	}
 	/* check correct origin (should be https:// + our name or localhost, where
@@ -361,7 +365,6 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		return HTTP_BAD_REQUEST;
 	}
 
-	authenticator_data_t authdata;
 	if (ar.authdata_len != sizeof(raw_authenticator_data_t)) {
 		warn("bad authenticator_data length (%ld vs. expected %ld",
 			 ar.authdata_len, sizeof(raw_authenticator_data_t));
@@ -369,78 +372,45 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 	}
 	decode_authenticator_data(&authdata,
 							  (raw_authenticator_data_t*)ar.authdata);
-	/* check that rp_id hash is correct */
-	if (memcmp(authdata.rp_id_hash, conf->rpid_hash, SHA256_LEN) != 0) {
-		error("RP-ID hash mismatch");
-		return HTTP_BAD_REQUEST;
-	}
-	/* check for user present bit, and user verified if requested by conf */
-	if (!(authdata.flags & ADF_UP)) {
-		warn("user present flag missing");
-		return HTTP_BAD_REQUEST;
-	}
-	if (conf->require_UV && !(authdata.flags & ADF_UV)) {
-		error("user not verified");
-		return HTTP_BAD_REQUEST;
-	}
 
-	fido2_user_t *uent;
 	if (!(uent = getuser_bycredid(req, conf, ar.credid))) {
 		error("unknown credential ID %s", ar.credid);
 		return HTTP_BAD_REQUEST;
 	}
-	//debug("credID=%s -> user %s", ar.credid, uent->name);
-	
-	/* hash authdata || clientdata */
+	ktype = get_ktype(uent->ktype);
+	if (!ktype) {
+		error("unsupported key type %s for CredID %s", uent->ktype, ar.credid);
+		return HTTP_INTERNAL_SERVER_ERROR;
+	}
+	debug("credID=%s -> user %s ktype %s", ar.credid, uent->name, uent->ktype);
+
+	if (!(pk = get_pubkey(ktype, uent->pubkey))) {
+		error("failed to get %s key for CredID %s", uent->ktype, ar.credid);
+		return HTTP_INTERNAL_SERVER_ERROR;
+	}
+
+	if (!(ass = fido_assert_new()) || fido_assert_set_count(ass, 1)) {
+		error("cannot create assertation");
+		return HTTP_INTERNAL_SERVER_ERROR;
+	}
 	sha256(ar.cdata, ar.cdata_len, hash);
-	uint8_t catbuf[ar.authdata_len+SHA256_LEN];
-	memcpy(catbuf, ar.authdata, ar.authdata_len);
-	memcpy(catbuf+ar.authdata_len, hash, SHA256_LEN);
-	sha256(catbuf, sizeof(catbuf), hash);
-
-	unsigned pkey_len = apr_base64_decode_len(uent->pubkey);
-	uint8_t pkey_data[pkey_len];
-	const uint8_t *pkey = pkey_data;
-	pkey_len = apr_base64_decode(pkey_data, uent->pubkey);
-
-	int verified = 0;
-	unsigned long e;
-	if (streq(uent->ktype, "es256")) {
-		EC_KEY *ec = d2i_EC_PUBKEY(NULL, &pkey, pkey_len);
-		if (!ec) {
-			error("failed to parse EC pubkey");
-			return HTTP_INTERNAL_SERVER_ERROR;
-		}
-		verified = ECDSA_verify(0, hash, SHA256_LEN,
-								ar.signature, ar.signature_len, ec);
-		e = ERR_get_error();
-		EC_KEY_free(ec);
-	}
-	else if (streq(uent->ktype, "rs256")) {
-		RSA *rk = d2i_RSA_PUBKEY(NULL, &pkey, pkey_len);
-		if (!rk) {
-			error("failed to parse RSA pubkey");
-			return HTTP_INTERNAL_SERVER_ERROR;
-		}
-		verified = RSA_verify(NID_sha256, hash, SHA256_LEN,
-							  ar.signature, ar.signature_len, rk);
-		e = ERR_get_error();
-		RSA_free(rk);
-	}
-	else {
-		error("unsupported key type '%s'", uent->ktype);
-		return HTTP_INTERNAL_SERVER_ERROR;
-	}
-	debug("signature verified=%d", verified);
-
-	if (!verified) {
-		char ebuf[1024];
-		ERR_error_string_n(e, ebuf, sizeof(ebuf));
-		debug("OpenSSL error %lu: %s", e, ebuf);
+	if ((r = fido_assert_set_rp(ass, conf->rpid_str)) ||
+		(r = fido_assert_set_clientdata_hash(ass, hash, SHA256_LEN)) ||
+		(r = fido_assert_set_authdata_raw(ass, 0, ar.authdata, ar.authdata_len)) ||
+		(r = fido_assert_set_sig(ass, 0, ar.signature, ar.signature_len)) ||
+		(r = fido_assert_set_up(ass, FIDO_OPT_TRUE)) ||
+		(r = (conf->require_UV ? fido_assert_set_uv(ass, FIDO_OPT_TRUE):0))) {
+		error("cannot set data into assertation object: %s", fido_strerr(r));
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 
-	char *token_str;
+	r = fido_assert_verify(ass, 0, ktype, pk);
+	free_pubkey(ktype, pk);
+	if (r) {
+		debug("verification error %d: %s", r, fido_strerr(r));
+		return HTTP_INTERNAL_SERVER_ERROR;
+	}
+
 	if (!(token_str = create_token(req, conf, uent)))
 		return HTTP_INTERNAL_SERVER_ERROR;
 	ap_set_content_type(req, "application/json");
