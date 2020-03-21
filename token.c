@@ -74,10 +74,10 @@ char *create_token(request_rec *req, fido2_config_t *conf, fido2_user_t *uent)
 	path = apr_pstrdup(req->pool, req->uri);
 	remove_slashes(path);
 	
-	apr_psprintf(req->pool, "%s;Path=%s;SameSite=Strict%s",
-				 jwt_encode_str(jwt),
-				 path,
-				 streq(req->hostname, "localhost") ? "" : ";Secure");
+	str = apr_psprintf(req->pool, "%s;Path=%s;SameSite=Strict%s",
+					   jwt_encode_str(jwt),
+					   path,
+					   streq(req->hostname, "localhost") ? "" : ";Secure");
 	debug("return token=%s val=%s", jwt_dump_str(jwt,0), jwt_encode_str(jwt));
 	jwt_free(jwt);
 
