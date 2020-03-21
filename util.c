@@ -15,7 +15,14 @@
 #include <httpd.h>
 #include <http_core.h>
 #include <http_log.h>
+#include <fido.h>
+#include <fido/es256.h>
+#include <fido/rs256.h>
+#include <fido/eddsa.h>
 #include <openssl/evp.h>
+#include <openssl/ec.h>
+#include <openssl/ecdsa.h>
+#include <openssl/pem.h>
 
 #include "mod_authnz_fido2.h"
 
@@ -135,6 +142,86 @@ void remove_slashes(char *str)
 	char *p = str+strlen(str)-1;
 	while(p > str && *p == '/')
 		*p-- = '\0';
+}
+
+int get_ktype(const char *str)
+{
+	if (streq(str, "es256"))
+		return COSE_ES256;
+	else if (streq(str, "rs256"))
+		return COSE_RS256;
+	else if (streq(str, "eddsa"))
+		return COSE_EDDSA;
+	else
+		return 0;
+}
+
+void *get_pubkey(int ktype, const char *kdata)
+{
+	void *ret = NULL;
+	unsigned pkey_len = apr_base64_decode_len(kdata);
+	uint8_t pkey_data[pkey_len];
+	const uint8_t *pkey = pkey_data;
+	pkey_len = apr_base64_decode(pkey_data, kdata);
+
+	switch(ktype) {
+	  case COSE_ES256: {
+		EC_KEY *ec = d2i_EC_PUBKEY(NULL, &pkey, pkey_len);
+		es256_pk_t *es256_pk;
+		if (!ec)
+			return NULL;
+		if (!(es256_pk = es256_pk_new()) || es256_pk_from_EC_KEY(es256_pk, ec)) {
+			EC_KEY_free(ec);
+			return NULL;
+		}
+		ret = es256_pk;
+		EC_KEY_free(ec);
+		break;
+	  }
+	  case COSE_RS256: {
+		RSA *rk = d2i_RSA_PUBKEY(NULL, &pkey, pkey_len);
+		rs256_pk_t *rs256_pk;
+		if (!rk)
+			return NULL;
+		if (!(rs256_pk = rs256_pk_new()) || rs256_pk_from_RSA(rs256_pk, rk)) {
+			RSA_free(rk);
+			return NULL;
+		}
+		ret = rs256_pk;
+		RSA_free(rk);
+	  }
+	  case COSE_EDDSA: {
+		eddsa_pk_t *eddsa_pk;
+		if (!(eddsa_pk = eddsa_pk_new()) ||
+			eddsa_pk_from_ptr(eddsa_pk, pkey, pkey_len))
+			return NULL;
+		ret = eddsa_pk;
+	  }
+	  default:
+		return NULL;
+	}
+	return ret;
+}
+
+void free_pubkey(int ktype, void *pk)
+{
+	switch(ktype) {
+	  case COSE_ES256: {
+		es256_pk_t *es256_pk = pk;
+		es256_pk_free(&es256_pk);
+		break;
+	  }
+	  case COSE_RS256: {
+		rs256_pk_t *rs256_pk = pk;
+		rs256_pk_free(&rs256_pk);
+		break;
+	  }
+	  case COSE_EDDSA: {
+		eddsa_pk_t *eddsa_pk;
+		eddsa_pk_free(&eddsa_pk);
+		break;
+	  }
+	}
 }
 
 int sha256(const uint8_t *in, size_t inlen, uint8_t *out)

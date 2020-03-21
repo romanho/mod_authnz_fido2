@@ -26,12 +26,9 @@
 #include <mod_ssl.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
-#include <openssl/ec.h>
-#include <openssl/ecdsa.h>
 #include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/err.h>
 #include <jansson.h>
+#include <fido.h>
 
 #include "mod_authnz_fido2.h"
 
