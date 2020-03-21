@@ -122,7 +122,8 @@ static void readpin(const char *prompt, char *pin, size_t pinlen)
 			fatal("/dev/tty: %s", strerror(errno));
 		ofd = ifd;
 	}
-	write(ofd, prompt, strlen(prompt));
+	if (write(ofd, prompt, strlen(prompt)) < 0)
+		fatal("write: %s", strerror(errno));
 
 	/* turn terminal's ECHO off */
 	if (tcgetattr(ifd, &tio_old))
@@ -153,7 +154,8 @@ static void readpin(const char *prompt, char *pin, size_t pinlen)
 			*p++ = c;
 	}
 	*p = '\0';
-	write(ofd, "\n", 1); /* newline isn't echoed, too */
+	if (write(ofd, "\n", 1) < 0) /* newline isn't echoed, too */
+		fatal("write: %s", strerror(errno));
 
 	if (sigprocmask(SIG_SETMASK, &sigs_old, NULL))
 		fatal("sigprocmask: %s", strerror(errno));
