@@ -52,9 +52,10 @@ static char *base64_encode(const uint8_t *p, size_t len)
 	BIO_write(bio_b64, p, (int)len);
 	BIO_flush(bio_b64);
 	rlen = BIO_get_mem_data(bio_b64, &b64_ptr);
-	if (rlen <= 0 || !(ret = malloc(rlen)))
+	if (rlen <= 0 || !(ret = malloc(rlen+1)))
 		return NULL;
 	memcpy(ret, b64_ptr, rlen);
+	ret[rlen] = '\0';
 	BIO_free(bio_b64);
 	BIO_free(bio_mem);
 	return ret;
