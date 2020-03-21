@@ -394,20 +394,23 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 	sha256(ar.cdata, ar.cdata_len, hash);
-	if ((r = fido_assert_set_rp(ass, conf->rpid_str)) ||
+	if ((r = fido_assert_set_rp(ass, get_rpid(req, conf))) ||
 		(r = fido_assert_set_clientdata_hash(ass, hash, SHA256_LEN)) ||
 		(r = fido_assert_set_authdata_raw(ass, 0, ar.authdata, ar.authdata_len)) ||
 		(r = fido_assert_set_sig(ass, 0, ar.signature, ar.signature_len)) ||
 		(r = fido_assert_set_up(ass, FIDO_OPT_TRUE)) ||
 		(r = (conf->require_UV ? fido_assert_set_uv(ass, FIDO_OPT_TRUE):0))) {
 		error("cannot set data into assertation object: %s", fido_strerr(r));
+		fido_assert_free(ass);
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 
 	r = fido_assert_verify(ass, 0, ktype, pk);
 	free_pubkey(ktype, pk);
+	fido_assert_free(ass);
+
 	if (r) {
-		debug("verification error %d: %s", r, fido_strerr(r));
+		error("FIDO2 verification error %d: %s", r, fido_strerr(r));
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 
