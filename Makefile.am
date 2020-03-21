@@ -13,7 +13,9 @@ libmodauthnzfido2_la_SOURCES = mod_authnz_fido2.c conf.c token.c util.c
 fido2_useradd_SOURCES = fido2-useradd.c
 
 install-exec-local:
-	${APXS} -i -a -n 'authnz_fido2' mod_authnz_fido2.la
+	moddir=$(DESTDIR)$$($(APXS) -q LIBEXECDIR)/; \
+	mkdir -p $$moddir; \
+	$(APXS) -i -S LIBEXECDIR=$$moddir -n 'authnz_fido2' mod_authnz_fido2.la
 
 mod_authnz_fido2.la: libmodauthnzfido2.la
 	${APXS} -c -o $@ $< ${APACHE_CFLAGS} ${JWT_CFLAGS} ${JWT_LIBS} \
