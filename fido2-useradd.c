@@ -299,7 +299,7 @@ int main(int argc, char *argv[])
 		  if (!(pk = eddsa_pk_new()) ||
 			  eddsa_pk_from_ptr(pk, pkey_data, pkey_len) != FIDO_OK ||
 			  !(pkey = eddsa_pk_to_EVP_PKEY(pk)))
-			  fatal("could not convert RSA key");
+			  fatal("could not convert EDDSA key");
 		  break;
 	  }  
 	  default:
