@@ -1,0 +1,11 @@
+Source: libapache2-mod-authnz-fido2
+Section: web
+Priority: optional
+Maintainer: Roman Hodek <roman@hodek.net>
+Build-Depends: debhelper (>= 11), apache2-threaded-dev | apache2-prefork-dev | apache2-dev, libssl-dev (>= 1.1.0), libjwt-dev, libjansson-dev, libfido2-dev (>= 1.3)
+Standards-Version: 3.8.2
+
+Package: libapache2-mod-authnz-fido2
+Architecture: any
+Depends: ${shlibs:Depends}, apache2.2-common | apache2.2-bin
+Description:  Authentication and authorization module for Apache 2 using FIFO2.

@@ -1,0 +1,5 @@
+libapache2-mod-authnz-fido2 (0.1) unstable; urgency=medium
+
+  * Initial release
+
+ -- Roman Hodek <roman@hodek.net>  Sat, 21 Mar 2020 12:56:13 +0100

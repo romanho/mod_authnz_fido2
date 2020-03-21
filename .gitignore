@@ -23,3 +23,10 @@ m4
 config.status
 stamp-h1
 fido2-useradd
+debian/*-stamp
+debian/*.before
+debian/*.after
+debian/*.debhelper
+debian/*.substvars
+debian/files
+debian/libapache2-mod-authnz-fido2
