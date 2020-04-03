@@ -401,13 +401,13 @@ static int process_webauthn_reply(request_rec *req, fido2_config_t *conf)
 		(r = fido_assert_set_up(ass, FIDO_OPT_TRUE)) ||
 		(r = (conf->require_UV ? fido_assert_set_uv(ass, FIDO_OPT_TRUE):0))) {
 		error("cannot set data into assertation object: %s", fido_strerr(r));
-		fido_assert_free(ass);
+		fido_assert_free(&ass);
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 
 	r = fido_assert_verify(ass, 0, ktype, pk);
 	free_pubkey(ktype, pk);
-	fido_assert_free(ass);
+	fido_assert_free(&ass);
 
 	if (r) {
 		error("FIDO2 verification error %d: %s", r, fido_strerr(r));
