@@ -27,7 +27,7 @@ Build with:
 
 You generally need the following packages:
 
->	sudo apt install apache2-dev libapr1-dev libssl-dev libjwt-dev libjansson-dev libfido2-dev
+>	sudo apt install apache2-dev libapr1-dev libssl-dev libjwt-dev libfido2-dev
 
 
 # Configuration
