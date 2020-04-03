@@ -43,7 +43,7 @@ typedef struct {
 #define DEFAULT_REQUIRE_UV		0
 #define DEFAULT_AUTH_TIMEOUT	30
 #define DEFAULT_TOKEN_VALID		60
-#define DEFAULT_JWTKEY_LIFETIME	60
+#define DEFAULT_JWTKEY_LIFETIME	720
 
 typedef struct {
 	const char *name;

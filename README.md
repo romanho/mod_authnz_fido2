@@ -86,6 +86,16 @@ The complete list of configuration variables is:
   The time (in minutes) how long a token should be valid. Default is 1
   hour (= 60 minutes).
 
+- `AuthFIDO2TokenKeyLifetime`
+
+  The time (in minutes) how long a key for signing tokens remains
+  valid. After that time, a new key is generated, but the old one is
+  still accepted for the same time (rotation with depth 2). In other
+  words: Tokens remain valid for at least TokenKeyLifetime and maximum
+  twice this lifetime.
+
+  Default is 12 hours (= 720 minutes).
+
 - `AuthFIDO2OfferAllUsers`
 
   This flag can be used to work around some problems I've seen with
