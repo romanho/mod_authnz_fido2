@@ -67,7 +67,7 @@ char *create_token(request_rec *req, fido2_config_t *conf, fido2_user_t *uent)
 	jwt_add_grant(jwt, "aud", rpid);
 	jwt_add_grant(jwt, "user", uent->name);
 	jwt_add_grant_int(jwt, "iat", now);
-	jwt_add_grant_int(jwt, "exp", now + conf->token_validity);
+	jwt_add_grant_int(jwt, "exp", now + conf->token_validity*60);
 
 	/* Some browsers store cookies twice if the path is just a little bit
 	 * different, e.g. by trailing '/' */
