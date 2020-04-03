@@ -19,7 +19,11 @@
 #include <jwt.h>
 
 #include "mod_authnz_fido2.h"
+APLOG_USE_MODULE(authnz_fido2);
 
+
+/* XXX: these data should be global in whole Apache, need some global memory
+ * for them and  */
 static apr_time_t jwtkey_lastrot = 0;
 static unsigned jwtkey_curr = 0;
 static uint8_t *jwtkey;
@@ -36,11 +40,14 @@ static uint8_t *jwtkey_maybe_rotate(request_rec *req, fido2_config_t *conf)
 {
 	apr_time_t now = apr_time_sec(apr_time_now());
 
+	debug("jwtkey_curr=%d lastrot %ld ago, do_rot=%d",
+		  jwtkey_curr, now-jwtkey_lastrot,
+		  now-jwtkey_lastrot > conf->jwtkey_lifetime*60);
 	if (now - jwtkey_lastrot > conf->jwtkey_lifetime*60) {
 		jwtkey_curr = (jwtkey_curr + 1) % JWTKEY_NUM;
 		jwtkey_lastrot = now;
 		RAND_bytes(jwtkey+jwtkey_curr*JWTKEY_LEN, JWTKEY_LEN);
-		debug("rotated JWT signing key, now #%u is current", jwtkey_curr);
+		debug("rotated, curr=%d now", jwtkey_curr);
 	}
 	return jwtkey + jwtkey_curr*JWTKEY_LEN;
 }
@@ -118,6 +125,9 @@ int check_token(request_rec *req, fido2_config_t *conf,
 
 	//debug("jwt token str = %s", tokstr);
 
+	/* rotate keys everytime those keys are used */
+	jwtkey_maybe_rotate(req, conf);
+	
 	/* Check if any of our keys can decode the token (so we still accept
 	 * previous tokens from before rotation), but start with the current one
 	 * (most likely) and then go backwards.  */
@@ -127,6 +137,7 @@ int check_token(request_rec *req, fido2_config_t *conf,
 			debug("jwtkey #%u decoded correctly", j);
 			break;
 		}
+		else debug("jwtkey #%u failed to decode", j);
 	}
 	if (i >= JWTKEY_NUM) {
 		set_auth_error(req, conf, "invalid_token",

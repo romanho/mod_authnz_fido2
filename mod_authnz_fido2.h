@@ -59,6 +59,7 @@ static __inline__ const char *strprefix(const char *a, const char *b) {
 	return (strncmp(a, b, len) == 0) ? a+len : NULL;
 }
 
+/* easy message logging (during request handling) */
 #define debug(fmt, args...) \
 	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, req, "%s: " fmt, __func__, ##args)
 #define info(fmt, args...) \

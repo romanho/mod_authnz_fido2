@@ -25,7 +25,7 @@
 #include <openssl/pem.h>
 
 #include "mod_authnz_fido2.h"
-
+APLOG_USE_MODULE(authnz_fido2);
 
 
 static fido2_user_t *getuser_byXXX(request_rec *req, fido2_config_t *conf,

@@ -476,28 +476,31 @@ static int fido2_handler(request_rec *req)
 /* registration															  */
 
 static int init_mod_fido2(apr_pool_t *pconf, apr_pool_t *plog,
-						  apr_pool_t *ptemp, server_rec *s)
+						  apr_pool_t *ptemp, server_rec *srec)
 {
-	request_rec *req = (request_rec*)s; // just for error/warn macros
 	uint8_t *jwtkey_mem;
+
+	/* XXX: this function is called by every child, do init only once! */
 	
     ap_add_version_component(pconf, NAME "/" VERSION);
+	/* NB, normal logging doesn't work here, I also didn't see messages by
+	 * ap_log_error() ?!? Fall back to simple fprintf(stderr). */
 
 	/* Use OpenSSL secure heap for our keys -- protect them as good as
 	 * possible. */
 	if (!CRYPTO_secure_malloc_initialized()) {
 		switch(CRYPTO_secure_malloc_init(8*1024, 16)) {
 		  case 0:
-			error("secure_malloc_init failed");
+			fprintf(stderr, "%s: secure_malloc_init failed\n", __func__);
 			return HTTP_INTERNAL_SERVER_ERROR;
 		  case 2:
-			warn("(no OpenSSL secured memory available)");
+			fprintf(stderr, "%s: warning: no OpenSSL secured memory available\n", __func__);
 			break;
 		}
 	}
 	if (!(jwtkey_mem = OPENSSL_secure_malloc(JWTKEY_LEN*JWTKEY_NUM)) ||
 		!(chmackey = OPENSSL_secure_malloc(CHMACKEY_LEN))) {
-		error("secure_malloc failed");
+		fprintf(stderr, "%s: secure_malloc_init failed\n", __func__);
 		return HTTP_INTERNAL_SERVER_ERROR;
 	}
 	RAND_bytes(chmackey, CHMACKEY_LEN);

@@ -20,6 +20,7 @@
 #include <http_config.h>
 
 #include "mod_authnz_fido2.h"
+APLOG_USE_MODULE(authnz_fido2);
 
 
 const command_rec authnz_fido2_cmds[] = {
